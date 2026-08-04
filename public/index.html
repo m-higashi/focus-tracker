@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#79c2ff">
+<title>集中トラッカー</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="集中トラッカー">
+<link rel="stylesheet" href="/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⏰</text></svg>">
+</head>
+<body>
+<div id="frame">
+
+<header>
+  <h1><span class="logo-ico">⏰</span>集中トラッカー</h1>
+  <span id="clock" class="clock"></span>
+</header>
+
+<main>
+  <!-- ============ メイン ============ -->
+  <section id="tab-main">
+    <div id="noticeBanner" class="notice hidden">
+      <span id="noticeText"></span>
+      <div class="notice-actions">
+        <button id="noticeActionBtn" class="btn-candy btn-c-purple">🏠 勤務終了にする</button>
+        <button id="noticeDismissBtn" class="btn-link">あとで</button>
+      </div>
+    </div>
+
+    <div class="stage">
+      <div class="stage-sky"></div>
+
+      <div class="hud">
+        <span id="stateBadge" class="badge badge-off">勤務外</span>
+        <div class="hud-chips">
+          <div class="hud-chip"><span class="hud-l">本日</span><span class="hud-v"><b id="mCount">0</b>件</span></div>
+          <div class="hud-chip" title="集中度(1.0が普段どおり・直近の移動平均)"><span class="hud-l">集中</span><span class="hud-v" id="mFocus">—</span></div>
+          <div class="hud-chip"><span class="hud-l">実働</span><span class="hud-v" id="mWork">0:00</span></div>
+          <div class="hud-chip" id="contChip" title="タップで経過⇔休憩までの残りを切替"><span class="hud-l" id="mContLabel">連続</span><span class="hud-v" id="mCont">—</span></div>
+          <div class="hud-chip"><span class="hud-l">平均</span><span class="hud-v" id="mAvg">—</span></div>
+        </div>
+      </div>
+
+      <div id="charSay" class="char-say hidden"></div>
+      <div class="char-frame"><img id="charImg" alt="キャラクター"></div>
+
+      <div class="side-buttons">
+        <button id="btnWorkStart" class="side-btn btn-c-green"><span class="sb-ico">🏢</span><span class="sb-l">勤務開始</span></button>
+        <button id="btnBreakStart" class="side-btn btn-c-teal"><span class="sb-ico">☕</span><span class="sb-l">休憩</span></button>
+        <button id="btnBreakEnd" class="side-btn btn-c-blue"><span class="sb-ico">▶</span><span class="sb-l">再開</span></button>
+        <button id="btnWorkEnd" class="side-btn btn-c-purple"><span class="sb-ico">🏠</span><span class="sb-l">勤務終了</span></button>
+      </div>
+
+      <button id="undoBtn" class="fab-undo" title="直前の記録を取り消す"><span class="sb-ico">↩</span><span class="sb-l">取消</span></button>
+
+      <div class="stage-bottom">
+        <div class="gauge-panel">
+          <span class="gauge-title">疲労度</span>
+          <div class="gauge"><div id="fatigueBar" class="gauge-fill"></div></div>
+          <span class="gauge-num"><span id="mFatigue">0</span>/<span id="mFatigueMax">15</span></span>
+        </div>
+        <div id="diffButtons" class="diff-row"></div>
+      </div>
+
+      <div id="alertBanner" class="banner hidden">
+        <button id="alertCloseBtn" class="banner-close">✕</button>
+        <div class="banner-head">
+          <span id="alertChip" class="banner-chip">QUEST</span>
+          <strong id="alertSuggestion">そろそろ休憩しましょう</strong>
+        </div>
+        <div class="banner-actions">
+          <button id="alertBreakBtn" class="btn-candy btn-c-green">☕ 休憩開始</button>
+          <button id="alertSnoozeBtn" class="btn-candy btn-c-gray">5分後に再通知</button>
+        </div>
+      </div>
+
+      <div id="sleepBanner" class="banner hidden">
+        <button id="sleepCloseBtn" class="banner-close">✕</button>
+        <div class="banner-head">
+          <span class="banner-chip" id="sleepChip">0時すぎ</span>
+          <strong>そろそろ寝ましょう 🌙</strong>
+        </div>
+        <div class="banner-actions">
+          <button id="sleepGoBtn" class="btn-candy btn-c-purple">🛏 就寝する</button>
+          <button id="sleepLaterBtn" class="btn-candy btn-c-gray">1時間後に再通知</button>
+        </div>
+      </div>
+    </div>
+
+    <details class="card today-card">
+      <summary>📋 本日の記録 <span id="todayListCount" class="muted"></span></summary>
+      <div id="todayList" class="rec-list"></div>
+    </details>
+
+    <span id="toast" class="toast hidden"></span>
+
+    <div id="resultModal" class="modal hidden">
+      <div class="result-card">
+        <div class="result-ribbon">RESULT</div>
+        <img id="resultChar" alt="">
+        <h2 id="resultTitle">今日もおつかれさまでした!</h2>
+        <div id="resultBody"></div>
+        <button id="resultCloseBtn" class="btn-candy btn-c-blue">閉じる</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 記録編集 ============ -->
+  <section id="tab-edit" class="hidden">
+    <div class="card">
+      <div class="edit-head">
+        <h2>📝 記録の編集</h2>
+        <div class="day-nav">
+          <button id="editPrev" class="day-btn" title="前の日">◀</button>
+          <input type="date" id="editDate">
+          <button id="editNext" class="day-btn" title="次の日">▶</button>
+        </div>
+      </div>
+      <!-- 作業記録とイベントは分けず、1本の時系列リストで表示する(ユーザー指定) -->
+      <div id="editList" class="rec-list"></div>
+      <div class="add-row">
+        <input type="time" id="addInspTime">
+        <select id="addInspDiff" class="sel-diff"></select>
+        <span class="rec-dur"></span><!-- 既存行の所要時間列ぶんのスペーサー(メモ欄の位置を揃える) -->
+        <input type="text" id="addInspNote" placeholder="メモ">
+        <button id="addInspBtn" class="rec-add" title="作業記録を追加">＋</button>
+      </div>
+      <div class="add-row">
+        <input type="time" id="addEvTime">
+        <select id="addEvType" class="sel-ev">
+          <option value="work_start">🏢 勤務開始</option>
+          <option value="break_start">☕ 休憩開始</option>
+          <option value="break_end">▶️ 休憩終了</option>
+          <option value="work_end">🏠 勤務終了</option>
+          <option value="sleep_start">🛏 就寝</option>
+          <option value="sleep_end">🌅 起床</option>
+        </select>
+        <input type="text" id="addEvNote" placeholder="メモ">
+        <button id="addEvBtn" class="rec-add" title="イベントを追加">＋</button>
+      </div>
+      <p class="muted">作業記録やイベント(勤務・休憩・睡眠)を追加できます。押し忘れの修正もここで。修正すると所要時間は自動で再計算されます。</p>
+    </div>
+  </section>
+
+  <!-- ============ 統計 ============ -->
+  <section id="tab-stats" class="hidden">
+    <div class="period-row">
+      <button data-period="today" class="active">日</button>
+      <button data-period="week">週</button>
+      <button data-period="month">月</button>
+      <button data-period="year">年</button>
+    </div>
+    <div class="stats-nav">
+      <button id="statsPrev" class="day-btn" title="前へ">◀</button>
+      <span id="statsRangeLabel"></span>
+      <button id="statsNext" class="day-btn" title="次へ">▶</button>
+    </div>
+    <div id="statsBody"></div>
+  </section>
+
+  <!-- ============ 設定 ============ -->
+  <section id="tab-settings" class="hidden">
+    <div class="card">
+      <h2>⚙ 設定</h2>
+      <h3>難易度ボタン</h3>
+      <div id="setDiffList"></div>
+      <button id="setDiffAdd" class="btn-ghost">＋ 段階を追加</button>
+
+      <h3>アラート</h3>
+      <div class="form-grid">
+        <label>連続作業アラート(分)<input type="number" id="setFixedMin" min="1"></label>
+        <label>疲労度しきい値<input type="number" id="setThreshold" min="1"></label>
+        <label>連続10分ごとの加算<input type="number" id="setPer10" min="0"></label>
+        <label>スヌーズ(分)<input type="number" id="setSnooze" min="1"></label>
+        <label>押し忘れ確認(分)<input type="number" id="setForgetMin" min="0"></label>
+        <label>就寝アラート<select id="setSleepPrompt">
+          <option value="22">22時から</option>
+          <option value="23">23時から</option>
+          <option value="0">0時から</option>
+          <option value="1">1時から</option>
+          <option value="2">2時から</option>
+          <option value="-1">通知しない</option>
+        </select></label>
+      </div>
+      <p class="muted">押し忘れ確認は 0 にすると無効になります。<br>就寝アラートは指定時刻〜朝5時の間、勤務外で起きていると表示されます。</p>
+
+      <h3>統計</h3>
+      <details class="help">
+        <summary>移動平均とは?</summary>
+        <p class="muted">「直近◯件の集中度をならした値」です(メインの「集中」チップと統計グラフの線に使用)。1件ごとの偶然のブレを吸収して、いまの調子を表します。件数を小さくすると変化に敏感になり、大きくするとなだらかになります。</p>
+      </details>
+      <div class="form-grid">
+        <label>移動平均の件数<input type="number" id="setMaWindow" min="1"></label>
+        <label>中央値の最低データ数<input type="number" id="setMinSamples" min="1"></label>
+      </div>
+
+      <h3>キャラクター</h3>
+      <div class="form-grid">
+        <label class="span2">キャラクターセット<select id="setCharSet"></select></label>
+      </div>
+      <div id="charPreview" class="char-preview"></div>
+
+      <h3>背景</h3>
+      <div class="form-grid">
+        <label class="span2">ステージ背景<select id="setStageBg"></select></label>
+      </div>
+      <div id="bgPreview" class="char-preview"></div>
+
+      <h3>データ管理</h3>
+      <div class="form-grid">
+        <button id="backupBtn" class="btn-plain">💾 バックアップ作成</button>
+        <button id="healthBtn" class="btn-ghost">🩺 データを点検</button>
+        <label class="span2">復元するバックアップ<select id="restoreSelect"></select></label>
+        <button id="restoreBtn" class="btn-ghost span2">⏪ このバックアップに復元</button>
+      </div>
+      <p class="muted">復元すると記録・イベント・設定が選んだ時点に戻ります。直前の状態も自動でバックアップされます。</p>
+      <p id="dataToolResult" class="muted"></p>
+
+      <div class="save-row">
+        <span class="muted">設定は変更するとすぐに保存されます。</span>
+        <span id="saveToast" class="toast hidden">保存しました</span>
+      </div>
+    </div>
+  </section>
+</main>
+
+<nav id="tabs">
+  <button data-tab="main" class="active"><span class="nav-ico">🏠</span><span>メイン</span></button>
+  <button data-tab="edit"><span class="nav-ico">📝</span><span>記録</span></button>
+  <button data-tab="stats"><span class="nav-ico">📊</span><span>統計</span></button>
+  <button data-tab="settings"><span class="nav-ico">⚙️</span><span>設定</span></button>
+</nav>
+
+</div>
+<script src="/app.js"></script>
+</body>
+</html>

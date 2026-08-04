@@ -1,0 +1,9 @@
+# 個人データ(絶対にコミットしない)
+data/
+backups/
+
+# ログ・一時ファイル
+*.log
+node_modules/
+Thumbs.db
+Desktop.ini

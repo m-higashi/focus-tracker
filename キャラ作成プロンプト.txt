@@ -1,0 +1,43 @@
+=====================================================
+ キャラクター追加用の画像生成プロンプト
+=====================================================
+
+■ 使い方
+  1. Gemini などの画像生成AIに、参考にしたいキャラクターの
+     画像を1枚添付する(人でも動物でもマスコットでもOK)
+  2. 下の英語プロンプトをそのまま貼り付けて生成
+  3. できあがったシートをClaudeに渡せば、透過処理・4分割・
+     アプリへの配置までやってもらえます
+     (背景が市松模様の「なんちゃって透過」でも処理できます)
+
+■ カスタマイズのヒント
+  ・白衣が不要なら「Dress the character ...」の行を削除
+  ・ポーズを変えたいときは THE 4 POSES の各行を書き換え
+    (アプリの割り当ては 左から idle / happy / stretch / rest)
+
+-----------------------------------------------------
+ ↓↓ ここから下をコピーして貼り付け ↓↓
+-----------------------------------------------------
+
+Create a character variation sheet based on the attached reference character.
+
+LAYOUT
+- One horizontal row containing exactly 4 full-body versions of the SAME character
+- Evenly spaced, with clear empty gaps between the figures (no overlapping)
+- All 4 figures at the same scale, feet aligned on the same invisible ground line
+- Fully transparent background (PNG with alpha). No scenery, no frame, no text, no watermark, no UI
+
+CHARACTER
+- Keep the attached character's identity: same face, hairstyle, hair color, eye color and overall vibe
+- Chibi anime style, soft rounded shapes, clean bold outlines, warm friendly colors (cute mobile game mascot look)
+- Dress the character in a white lab coat (knee length, worn open) in all 4 poses, with their own clothes visible underneath
+
+THE 4 POSES (left to right)
+1. IDLE - standing upright and relaxed, neutral gentle expression, arms at the sides
+2. HAPPY - cheerful celebration: big smile, happy closed eyes, small hearts and sparkles floating around the figure
+3. STRETCH - both arms raised high in a big stretch, mouth open as if exhaling, refreshed and energetic
+4. REST - sitting down and dozing, eyes closed, cheek resting on one hand, sleepy and cozy
+
+QUALITY
+- High resolution, each figure at least 400px tall
+- A soft subtle shadow ellipse under each figure's feet is fine; nothing else may touch the figures

@@ -1,0 +1,14 @@
+{
+  "name": "focus-tracker",
+  "version": "1.0.0",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "description": "集中力管理アプリ",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}
