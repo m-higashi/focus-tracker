@@ -37,7 +37,7 @@ git clone https://github.com/m-higashi/focus-tracker.git
 
 ---
 
-# セットアップ 〜 自動起動(お使いのOSの節だけ読んでください)
+# セットアップ 〜 自動起動
 
 ここから **自動起動の設定までは Windows と macOS で手順が違います**。
 ご自分のOSの節だけを読み、読み終えたら [ここから先は共通](#ここから先は共通) へ進んでください。
@@ -214,6 +214,7 @@ http://100.x.y.z:3000
 ### tailscale serve で HTTPS 化する場合
 
 HTTPSで配信したい場合は tailscale serve が使えます(必須ではありません。アプリはHTTPのままでも全機能動きます)。
+**コマンドは Windows・macOS で共通**です(アプリではなく Tailscale の機能です)。
 
 ```
 tailscale serve --bg 3000
@@ -221,12 +222,21 @@ tailscale serve --bg 3000
 
 これで `https://<マシン名>.<tailnet名>.ts.net/` からアクセスできます。確認は `tailscale serve status`、解除は `tailscale serve --bg off`。
 
+- **Windows**: コマンドプロンプト(または PowerShell)で実行します
+- **macOS**: ターミナルで実行します。`tailscale: command not found` になる場合は、
+  アプリ内のコマンドに一度だけリンクを張ってください
+  → `sudo ln -s /Applications/Tailscale.app/Contents/MacOS/Tailscale /usr/local/bin/tailscale`
+
 ## バックアップと引越し
 
 - データはすべて `data/focus.db`(SQLite)にあります。アプリ一式は1フォルダ完結・相対パスのみなので、**フォルダごとコピーすればバックアップ=引越しが完了**します(WindowsとmacOSの間で移しても、そのまま使えます)
 - **毎日、その日最初の「勤務開始」で自動バックアップ**されます(`backups/` に日時付きで保存、直近30個を保持)。手動は設定タブ「💾 バックアップ作成」、復元も設定タブからUIで行えます(「🩺 データを点検」で整合性確認も可能)
 
 ## 手動起動と起動オプション
+
+`Start.bat` / `Start.command` を使わず、自分でコマンドから起動する場合の話です。
+**次の2行は Windows・macOS で共通**(Windows はコマンドプロンプト、macOS はターミナルで、
+このフォルダに移動してから実行します)。
 
 ```
 npm install   （依存ゼロなので一瞬で終わります）
