@@ -1,3 +1,6 @@
 # バッチファイルはCRLF必須(LFだとcmdが誤動作する)
 *.bat text eol=crlf
 *.cmd text eol=crlf
+# シェルスクリプトはLF必須(CRLFだとmacOS/Linuxが起動に失敗する)
+*.command text eol=lf
+*.sh text eol=lf

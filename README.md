@@ -17,9 +17,32 @@
 
 ## セットアップと起動
 
-**通常は `Start.bat` をダブルクリックするだけです**(コンソール1本で起動し、閉じると停止)。
+### Windows
 
-開発・手動起動する場合:
+**`Start.bat` をダブルクリックするだけです**(コンソール1本で起動し、閉じると停止)。
+
+### macOS / Linux
+
+**`Start.command` をダブルクリック**します(ターミナルが開いて起動し、ウィンドウを閉じると停止)。
+
+初回だけ2つ準備が必要です。
+
+1. **Node.js 22.13以降を入れる**
+   [nodejs.org](https://nodejs.org/) のインストーラ、または Homebrew で `brew install node`
+2. **実行できるようにする**(zipから展開した場合)
+   ターミナルでアプリのフォルダへ移動して以下を実行します。
+   ```
+   chmod +x Start.command backup.command
+   ```
+   `git clone` した場合は実行権限が付いているので不要です。
+
+初回起動時に「開発元を確認できないため開けません」と出た場合は、
+`Start.command` を **右クリック →「開く」** を選び、確認ダイアログで「開く」を押してください
+(一度許可すれば次からはダブルクリックで起動します)。
+
+> Node同梱zip は Windows 版(`-win-x64.zip`)のみです。macOS では Node.js のインストールが必要です。
+
+### 開発・手動起動(共通)
 
 ```
 npm install   （依存ゼロなので一瞬で終わります）
@@ -32,8 +55,10 @@ npm start
 
 - **Tailscale が動いている場合**: Tailscale IP(100.x.x.x)と localhost のみで待ち受けます。Tailscaleネットワーク内の端末と自分のPCからだけアクセスでき、社内LANには公開されません
 - **Tailscale IP が見つからない場合**: `0.0.0.0`(全インターフェース)で待ち受けます
-- 手動で固定したい場合: 環境変数 `HOST` を設定(例: `set HOST=0.0.0.0 && npm start`)
-- ポートを変えたい場合: 環境変数 `PORT` を設定(例: `set PORT=8080 && npm start`)
+- 手動で固定したい場合: 環境変数 `HOST` を設定
+  - Windows: `set HOST=0.0.0.0 && npm start`
+  - macOS/Linux: `HOST=0.0.0.0 npm start`
+- ポートを変えたい場合: 環境変数 `PORT` を設定(例: macOS/Linux は `PORT=8080 npm start`)
 
 起動時のコンソールに、実際に待ち受けているURLが表示されます。
 
@@ -57,13 +82,20 @@ tailscale serve --bg 3000
 
 これで `https://<マシン名>.<tailnet名>.ts.net/` からアクセスできます。確認は `tailscale serve status`、解除は `tailscale serve --bg off`。
 
-## Windows 起動時の自動起動
+## サインイン時の自動起動
 
-### 方法0: RegisterAutostart.cmd(いちばん簡単・推奨)
+### macOS の場合
+
+「システム設定」→「一般」→「ログイン項目」→ 左下の「+」で `Start.command` を追加します。
+解除は同じ画面で「−」を押すだけです。
+
+### Windows の場合
+
+#### 方法0: RegisterAutostart.cmd(いちばん簡単・推奨)
 
 同梱の `RegisterAutostart.cmd` をダブルクリックするだけで、サインイン時に自動起動するようになります(スタートアップフォルダにショートカットを作る方式。管理者権限不要)。解除は `UnregisterAutostart.cmd`。
 
-### 方法1: タスクスケジューラ(追加ソフト不要)
+#### 方法1: タスクスケジューラ(追加ソフト不要)
 
 1. タスクスケジューラを開く → 「基本タスクの作成」
 2. 名前: `集中トラッカー` など
@@ -74,7 +106,7 @@ tailscale serve --bg 3000
    - 開始(作業フォルダ): このフォルダのフルパス(例: `C:\Users\<ユーザー名>\Desktop\集中力管理`)
 5. 作成後、タスクのプロパティ → 「ユーザーがログオンしているかどうかにかかわらず実行する」にすると常時起動になります
 
-### 方法2: pm2 を使う場合
+#### 方法2: pm2 を使う場合
 
 ```
 npm install -g pm2
@@ -107,7 +139,7 @@ pm2 save
 
 ## バックアップと引越し
 
-- データはすべて `data/focus.db`(SQLite)にあります。アプリ一式は1フォルダ完結・相対パスのみなので、**フォルダごとコピーすればバックアップ=引越しが完了**します
+- データはすべて `data/focus.db`(SQLite)にあります。アプリ一式は1フォルダ完結・相対パスのみなので、**フォルダごとコピーすればバックアップ=引越しが完了**します(WindowsとmacOSの間で移しても、そのまま使えます)
 - **毎日、その日最初の「勤務開始」で自動バックアップ**されます(`backups/` に日時付きで保存、直近30個を保持)。手動は設定タブ「💾 バックアップ作成」、復元も設定タブからUIで行えます(「🩺 データを点検」で整合性確認も可能)
 - `backup.cmd` はダブルクリック用の代替手段です
 
@@ -139,7 +171,10 @@ public/            フロントエンド(素のHTML/CSS/JS、ビルド不要)
 assets/character/  キャラクター画像(白衣の動物5種)
 assets/bg/         ステージ背景画像(時間帯4種×平日/休日+イベント用。時間帯で自動切替)
 data/focus.db      データ本体(SQLite。初回起動時に作られます)
-backup.cmd         バックアップスクリプト
+Start.bat          起動(Windows)
+Start.command      起動(macOS / Linux)
+backup.cmd         バックアップスクリプト(Windows)
+backup.command     バックアップスクリプト(macOS / Linux)
 説明書.md / .txt   詳しい使い方ガイド
 ```
 
