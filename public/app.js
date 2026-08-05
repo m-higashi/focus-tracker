@@ -104,6 +104,10 @@ function armDelete(btn, onConfirm) {
 let currentTab = 'main';
 
 function showTab(tab) {
+  // メインを離れるときは「本日の記録」を畳んでおく(開きっぱなしだと、
+  // 戻ってきたときに下まで伸びた状態で表示されて位置を見失うため)。
+  // 畳んだ状態はこの関数の末尾の saveUiState() で保存される
+  if (currentTab === 'main' && tab !== 'main' && todayCard) todayCard.open = false;
   currentTab = tab;
   $$('#tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
   ['main', 'edit', 'stats', 'settings'].forEach(t =>
