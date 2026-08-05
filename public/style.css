@@ -453,6 +453,13 @@ input[type="time"]::-webkit-date-and-time-value { text-align: center; } /* iOS�
 /* PCのChrome/Edgeは時刻入力内に時計アイコンを出し、60px固定幅では値の末尾が隠れるため非表示にする
    (キーボード・矢印キーでの編集は今までどおり可能。スマホには元々このアイコンは無い) */
 input[type="time"]::-webkit-calendar-picker-indicator { display: none; }
+/* 入れ忘れた欄を目立たせる。Safariは空の時刻欄に「12:30」のような見本を薄く表示するため
+   入力済みに見えてしまい、押しても反応しないように感じられる(2026-08-05のmacOS実機検証)。
+   トーストだけでは気づかれないので、欄そのものを縁取って知らせる */
+.add-row input.need-input, .rec-row input.need-input {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 3px rgba(224, 86, 86, .3);
+}
 /* セレクトも固定幅にして、作業記録とイベントでメモ欄の左端を一致させる
    (時刻60+難易度70+gap8+所要50 = 時刻60+種別128。種別=難易度+所要+gapぶん) */
 .sel-diff { width: 70px; }

@@ -581,9 +581,19 @@ $('#addInspDiff').addEventListener('change', () => {
   $('#addInspDiff').style.color = diffColor($('#addInspDiff').value);
 });
 
+// 入れ忘れた欄を光らせて、そこへカーソルを移す。トーストは小さく2秒で消えるため、
+// Safariのように空の時刻欄が「入力済み」に見えるブラウザだと見落とされる
+// (2026-08-05のmacOS実機検証。Safariは空欄に「12:30」のような見本を薄く表示する)
+function needInput(el, msg) {
+  showToast($('#toast'), msg, false);
+  el.classList.add('need-input');
+  el.focus();
+  setTimeout(() => el.classList.remove('need-input'), 2500);
+}
+
 $('#addInspBtn').addEventListener('click', async () => {
   const t = $('#addInspTime').value;
-  if (!t) return showToast($('#toast'), '時刻を入力してください', false);
+  if (!t) return needInput($('#addInspTime'), '時刻を入力してください');
   try {
     await api('/api/inspections', {
       method: 'POST',
@@ -600,7 +610,7 @@ $('#addInspBtn').addEventListener('click', async () => {
 
 $('#addEvBtn').addEventListener('click', async () => {
   const t = $('#addEvTime').value;
-  if (!t) return showToast($('#toast'), '時刻を入力してください', false);
+  if (!t) return needInput($('#addEvTime'), '時刻を入力してください');
   try {
     await api('/api/events', {
       method: 'POST',
