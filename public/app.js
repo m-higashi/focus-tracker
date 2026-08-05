@@ -589,6 +589,9 @@ $('#addInspBtn').addEventListener('click', async () => {
       method: 'POST',
       body: { difficulty: $('#addInspDiff').value, at: timeToMs(currentEditDate(), t), note: $('#addInspNote').value },
     });
+    // 入力欄は毎回空に戻す。時刻が残っていると、次の追加で前の時刻を
+    // そのまま送ってしまいやすく、追加済みかどうかも分かりにくい
+    $('#addInspTime').value = '';
     $('#addInspNote').value = '';
     showToast($('#toast'), '記録を追加しました');
     refreshAfterEdit();
@@ -603,6 +606,7 @@ $('#addEvBtn').addEventListener('click', async () => {
       method: 'POST',
       body: { type: $('#addEvType').value, at: timeToMs(currentEditDate(), t), note: $('#addEvNote').value },
     });
+    $('#addEvTime').value = '';
     $('#addEvNote').value = '';
     showToast($('#toast'), 'イベントを追加しました');
     refreshAfterEdit();
