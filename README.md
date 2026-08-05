@@ -84,7 +84,7 @@ node -v
 「アクセス権がありません」と出たときだけ、次を実行してください。
 
 ```bash
-chmod +x Start.command backup.command
+chmod +x Start.command
 ```
 
 #### 4. Mac起動時に自動で立ち上げる(任意)
@@ -97,7 +97,6 @@ chmod +x Start.command backup.command
 | Windows | macOS / Linux |
 |---|---|
 | `Start.bat` | `Start.command` |
-| `backup.cmd` | `backup.command` |
 | `Setup.bat` | ありません(Node.js をご自分で入れます) |
 | `RegisterAutostart.cmd` / `UnregisterAutostart.cmd` | ありません(ログイン項目で登録・解除) |
 | `data\focus.db` | `data/focus.db` |
@@ -204,7 +203,6 @@ pm2 save
 
 - データはすべて `data/focus.db`(SQLite)にあります。アプリ一式は1フォルダ完結・相対パスのみなので、**フォルダごとコピーすればバックアップ=引越しが完了**します(WindowsとmacOSの間で移しても、そのまま使えます)
 - **毎日、その日最初の「勤務開始」で自動バックアップ**されます(`backups/` に日時付きで保存、直近30個を保持)。手動は設定タブ「💾 バックアップ作成」、復元も設定タブからUIで行えます(「🩺 データを点検」で整合性確認も可能)
-- `backup.cmd` はダブルクリック用の代替手段です
 
 ## セキュリティ
 
@@ -236,8 +234,6 @@ assets/bg/         ステージ背景画像(時間帯4種×平日/休日+イベ�
 data/focus.db      データ本体(SQLite。初回起動時に作られます)
 Start.bat          起動(Windows)
 Start.command      起動(macOS / Linux)
-backup.cmd         バックアップスクリプト(Windows)
-backup.command     バックアップスクリプト(macOS / Linux)
 説明書.md / .txt   詳しい使い方ガイド
 ```
 
