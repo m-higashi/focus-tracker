@@ -1,11 +1,20 @@
 @echo off
-rem Backup script: copies data\focus.db (and WAL files) to backups\YYYYMMDD\
-rem Same as the in-app backup button; this is a double-click alternative.
+rem Backup script: same as the in-app backup button (checkpoint WAL, then copy
+rem data\focus.db to backups\focus-YYYYMMDD-HHMMSS.db). The result can be
+rem restored from the app's "restore" screen. Double-click alternative.
 setlocal
 cd /d "%~dp0"
-for /f %%i in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd"') do set TODAY=%%i
-set DST=backups\%TODAY%
-if not exist "%DST%" mkdir "%DST%"
-copy /Y "data\focus.db*" "%DST%\" >nul
-echo Backup done: %DST%
+
+where node >nul 2>nul
+if errorlevel 1 (
+    echo Node.js not found. Please install Node.js 22.13 or later.
+    echo https://nodejs.org/
+    pause
+    exit /b 1
+)
+
+node backup.mjs
+
+echo.
+pause
 endlocal
