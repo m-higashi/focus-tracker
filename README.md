@@ -45,30 +45,65 @@ git clone https://github.com/m-higashi/focus-tracker.git
 ### macOS / Linux
 
 **`Start.command` をダブルクリック**します(ターミナルが開いて起動し、ウィンドウを閉じると停止)。
+**実機(macOS 26.5.1 / Apple Silicon)で動作を確認済み**です。
 
-初回だけ2つ準備が必要です。
+#### 1. Node.js を入れる(初回だけ)
 
-1. **Node.js 22.13以降を入れる**
-   [nodejs.org](https://nodejs.org/) のインストーラ、または Homebrew で `brew install node`
-2. **実行できるようにする**(zipから展開した場合)
-   ターミナルでアプリのフォルダへ移動して以下を実行します。
-   ```
-   chmod +x Start.command backup.command
-   ```
-   `git clone` した場合は実行権限が付いているので不要です。
+**22.13 以上**が必要です。まず確認してください。
 
-初回起動時に「開発元を確認できないため開けません」「ブロックされました」と出た場合は、
-**初回だけ**許可の操作が要ります。**macOS のバージョンで場所が違います。**
+```bash
+node -v
+```
+
+`v22.13` 以上と出ればそのまま使えます。無い・古い場合はどちらかで入れてください。**どちらでも動作は同じです。**
+
+| 入れかた | 補足 |
+|---|---|
+| [nodejs.org](https://nodejs.org/) の「**LTS**」版インストーラ | 設定は変えず進めるだけ。⚠️途中で**管理者パスワード**を求められます |
+| `brew install node` | すでに Homebrew をお使いなら。**管理者パスワードは不要** |
+
+> Node同梱zip は Windows 版(`-win-x64.zip`)のみです。macOS では Node.js のインストールが必要です。
+
+#### 2. 初回起動時の「ブロックされました」
+
+作者の署名(Apple への有料登録)が無いため、**初回だけ**許可の操作が要ります。
+**macOS のバージョンで場所が違います。**
 
 | バージョン | 操作 |
 |---|---|
-| **macOS 15 (Sequoia) 以降** | システム設定 → **プライバシーとセキュリティ** → 下までスクロールし「"Start.command" は…ブロックされました」の右の **「このまま開く」** → 許可後にもう一度ダブルクリック |
+| **macOS 15 (Sequoia) 以降** | システム設定 → **プライバシーとセキュリティ** → **セキュリティ欄**(FileVault の少し上あたり)の「お使いのMacを保護するために "Start.command" がブロックされました」の右の **「このまま開く」** → 許可後にもう一度ダブルクリック |
 | macOS 14 (Sonoma) 以前 | `Start.command` を右クリック(control+クリック)→ **「開く」** → 確認画面でもう一度「開く」 |
 | どちらも面倒なとき | ターミナルで `sh ` と打ち、半角スペースの後に `Start.command` をドラッグ&ドロップして Enter |
 
 一度許可すれば、次からはダブルクリックで起動します。
+⚠️**画面には何も出ず、通知だけのことがあります。**「押しても何も起きない」ときは、まずここを疑ってください。
 
-> Node同梱zip は Windows 版(`-win-x64.zip`)のみです。macOS では Node.js のインストールが必要です。
+#### 3. 実行権限について
+
+**通常は何もいりません。** ZIP・`git clone` のどちらで入れても実行権限は付いています。
+「アクセス権がありません」と出たときだけ、次を実行してください。
+
+```bash
+chmod +x Start.command backup.command
+```
+
+#### 4. Mac起動時に自動で立ち上げる(任意)
+
+「システム設定」→「一般」→「ログイン項目」で `Start.command` を追加します。
+やめるときは同じ画面で「−」を押すだけです(Windows の `RegisterAutostart.cmd` に相当します)。
+
+#### 5. Windows のファイルとの対応
+
+| Windows | macOS / Linux |
+|---|---|
+| `Start.bat` | `Start.command` |
+| `backup.cmd` | `backup.command` |
+| `Setup.bat` | ありません(Node.js をご自分で入れます) |
+| `RegisterAutostart.cmd` / `UnregisterAutostart.cmd` | ありません(ログイン項目で登録・解除) |
+| `data\focus.db` | `data/focus.db` |
+
+**フォルダごとコピーすれば Windows ⇄ Mac の行き来もできます**(記録データの中身は共通です)。
+スマホから使うアドレス(`100.x.x.x`)は端末ごとに変わるので、移したあとは起動時の表示で確認してください。
 
 ### 開発・手動起動(共通)
 
