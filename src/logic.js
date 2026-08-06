@@ -57,10 +57,18 @@ function validateSetting(key, v, cur) {
     case 'maWindow':        return clampNum(v, 1, 50, cur);
     case 'minSamples':      return clampNum(v, 1, 100, cur);
     case 'sleepPromptHour': return clampNum(v, -1, 23, cur);
-    case 'characterSet':
-    case 'stageBg': {
-      if (typeof v !== 'string' || v.length > 200) throw new Error(`${key} が不正です`);
+    // キャラ・背景は実在するものだけ受け付ける(存在しない名前が保存されると
+    // 画像が出ない状態になり、原因も分かりにくいため)
+    case 'characterSet': {
+      if (typeof v !== 'string' || v.length > 200) throw new Error('characterSet が不正です');
+      if (!Object.hasOwn(characterSets(), v)) throw new Error('そのキャラクターセットはありません');
       return v;
+    }
+    case 'stageBg': {
+      if (typeof v !== 'string' || v.length > 200) throw new Error('stageBg が不正です');
+      // 'auto'=時間帯で自動(平日)、'auto_holiday'=同(休日)、それ以外は assets/bg 内のファイル名
+      if (v === 'auto' || v === 'auto_holiday' || backgrounds().includes(v)) return v;
+      throw new Error('その背景はありません');
     }
     case 'dailyExclude': {
       if (!Array.isArray(v)) throw new Error('dailyExclude が不正です');
@@ -75,8 +83,12 @@ export function saveSettings(patch) {
     'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
   );
   for (const [k, v] of Object.entries(patch)) {
-    if (!(k in DEFAULT_SETTINGS)) continue;
-    stmt.run(k, JSON.stringify(validateSetting(k, v, cur[k])));
+    // hasOwn で見る。`k in` だと __proto__ や toString など Object.prototype 側の名前が
+    // 素通りして、検証なしのまま保存処理へ落ちる
+    if (!Object.hasOwn(DEFAULT_SETTINGS, k)) continue;
+    const val = validateSetting(k, v, cur[k]);
+    if (val === undefined) continue;
+    stmt.run(k, JSON.stringify(val));
   }
   invalidateMedians(); // minSamples・難易度の変更が「参考値」判定に効くため
   return getSettings();
@@ -116,18 +128,24 @@ export function effectiveDayStr(t = Date.now()) {
 // この日に始まって0時をまたいだ勤務は退勤まで(未退勤なら現在まで)この日が引き取る
 export function effectiveRange(day, now = Date.now()) {
   const [s, e] = dayRange(day);
-  const firstEndAfter = t => db.prepare(
-    "SELECT at FROM work_events WHERE deleted = 0 AND type = 'work_end' AND at >= ? ORDER BY at, id LIMIT 1"
-  ).get(t)?.at;
+  // 開いている勤務が終わる時刻。通常は次の退勤だが、退勤を押し忘れたまま
+  // 次の勤務開始が来た場合は、そこで前の勤務は終わっている
+  // (これを見ないと、月曜の退勤を押し忘れただけで火曜の記録が全部月曜に吸われ、
+  //  火曜が「0件・実働0」と表示される)
+  const firstCloseAfter = t => db.prepare(
+    "SELECT at, type FROM work_events WHERE deleted = 0 AND type IN ('work_end','work_start') AND at >= ? ORDER BY at, id LIMIT 1"
+  ).get(t);
   let start = s, end = e;
   if (openSessionAt(s) != null) {
-    const close = firstEndAfter(s);
-    start = close != null ? close + 1 : e; // 前日勤務がまだ退勤していなければ、この日の取り分はまだ無い
+    const close = firstCloseAfter(s);
+    // 退勤で閉じるならその直後から、次の勤務開始で閉じるならその時刻からがこの日の取り分。
+    // どちらも無ければ前日勤務が続いているので、この日の取り分はまだ無い
+    start = close ? (close.type === 'work_end' ? close.at + 1 : close.at) : e;
   }
   const openE = openSessionAt(e);
   if (openE != null && openE >= s) {
-    const close = firstEndAfter(e);
-    end = close != null ? close + 1 : Math.max(e, now + 1);
+    const close = firstCloseAfter(e);
+    end = close ? (close.type === 'work_end' ? close.at + 1 : close.at) : Math.max(e, now + 1);
   }
   return [start, end];
 }
@@ -267,7 +285,6 @@ export function computeStatus(now = Date.now()) {
 
   // 押し忘れ検知①: 勤務が日をまたぎ、かつ記録もイベントも長時間止まっている
   // (0時またぎの夜勤自体は正常なので、日付が変わっただけでは出さない。ユーザー指定 2026-08-03)
-  const FORGOT_IDLE_MS = 2 * 3600000;
   let forgotten = null;
   const lastActivityAt = Math.max(last?.at || 0, lastInsp?.ended_at || 0);
   if (last && (state === 'working' || state === 'break') &&
@@ -354,6 +371,27 @@ export function dailyResult(day) {
   };
 }
 
+// 押し忘れバナーを出す基準(日をまたぎ、かつこの時間なにも操作がない)
+export const FORGOT_IDLE_MS = 2 * 3600000;
+// 実働の集計を打ち切る基準。バナーより長くとる。
+// バナーと同じ2時間で切ると、夜勤で記録の間隔が空いただけの「本当に勤務中」の実働まで
+// 止まって見えてしまう。12時間なにも押していない勤務は、実際には退勤済みとみなす
+const STALE_WORK_MS = 12 * 3600000;
+
+// まだ閉じていない勤務区間を、どこまで実働として数えるか。
+// 通常は範囲の終わり(=勤務中ならいま)まで数えるが、放置された勤務は最後の活動時刻で打ち切る。
+// (打ち切らないと、退勤を押し忘れた過去の1日が「実働3778時間」のように表示される)
+// [from, to) の最後の活動時刻(記録の終了時刻・打刻のうち最も遅いもの)。無ければ from
+function lastActivityIn(from, to) {
+  const lastInsp = db.prepare(
+    'SELECT ended_at AS t FROM inspections WHERE deleted = 0 AND ended_at >= ? AND ended_at < ? ORDER BY ended_at DESC, id DESC LIMIT 1'
+  ).get(from, to)?.t ?? 0;
+  const lastEv = db.prepare(
+    'SELECT at AS t FROM work_events WHERE deleted = 0 AND at >= ? AND at < ? ORDER BY at DESC, id DESC LIMIT 1'
+  ).get(from, to)?.t ?? 0;
+  return Math.max(from, lastInsp, lastEv);
+}
+
 function workSecInRange(s, e, now) {
   const end = Math.min(e, now);
   const evs = db.prepare(
@@ -362,13 +400,25 @@ function workSecInRange(s, e, now) {
   let total = 0, openAt = null;
   for (const ev of evs) {
     if (ev.type === 'work_start' || ev.type === 'break_end') {
-      if (openAt == null) openAt = ev.at;
+      if (openAt == null) { openAt = ev.at; continue; }
+      // 勤務が開いたままなのに次の勤務開始が来た = 前の勤務の退勤を押し忘れている。
+      // 前の勤務は「新しい勤務開始より前の最後の活動」で終わったものとして数える
+      // (そのまま繋げると、月曜の退勤を押し忘れただけで火曜の退勤まで一続きの
+      //  勤務になり、実働が数十〜数千時間として表示されてしまう)
+      if (ev.type === 'work_start') {
+        total += Math.max(0, lastActivityIn(openAt, ev.at) - openAt);
+        openAt = ev.at;
+      }
     } else if (openAt != null) {
       total += ev.at - openAt;
       openAt = null;
     }
   }
-  if (openAt != null) total += end - openAt;
+  // 閉じていない勤務。放置(STALE_WORK_MS以上なにも操作なし)なら最後の活動で打ち切る
+  if (openAt != null) {
+    const last = lastActivityIn(openAt, end);
+    total += Math.max(0, (now - last >= STALE_WORK_MS ? last : end) - openAt);
+  }
   return Math.floor(total / 1000);
 }
 

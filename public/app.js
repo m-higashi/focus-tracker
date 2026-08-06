@@ -6,11 +6,28 @@ const $ = sel => document.querySelector(sel);
 const $$ = sel => [...document.querySelectorAll(sel)];
 
 async function api(path, opts = {}) {
-  const res = await fetch(path, {
-    headers: { 'Content-Type': 'application/json' },
-    ...opts,
-    body: opts.body ? JSON.stringify(opts.body) : undefined,
-  });
+  // タイムアウトは必須。サーバーが止まった直後の要求は「失敗」ではなく「いつまでも返らない」に
+  // なることがあり、放置するとブラウザの同時接続枠(1ホスト6本)を10秒ポーリングが埋めて、
+  // 以後どのボタンも無反応になる(=画面が固まったように見える)
+  const { timeout = 8000, ...rest } = opts;
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeout);
+  let res;
+  try {
+    res = await fetch(path, {
+      headers: { 'Content-Type': 'application/json' },
+      ...rest,
+      signal: ac.signal,
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+    });
+  } catch (e) {
+    // "Failed to fetch" では何が起きたか分からないので原因を名指しする
+    throw new Error(e?.name === 'AbortError'
+      ? '応答がありません(アプリが止まっていないか確認してください)'
+      : 'アプリに接続できません(Start.bat の黒い窓が閉じていないか確認してください)');
+  } finally {
+    clearTimeout(timer);
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
   return data;
@@ -97,6 +114,16 @@ function armDelete(btn, onConfirm) {
     btn.classList.remove('armed');
     btn.textContent = '🗑';
   }, 3000);
+}
+
+// 二重送信ガード。応答が返る前にもう一度押されたぶんは捨てる
+// (記録ボタンの連打で同じ記録が2件入る・勤務開始が2回打刻される、を防ぐ)。
+// キーごとに1本だけ通すので、別種の操作は待たされない。
+const inFlight = new Set();
+async function once(key, fn) {
+  if (inFlight.has(key)) return;
+  inFlight.add(key);
+  try { return await fn(); } finally { inFlight.delete(key); }
 }
 
 // ================= タブ =================
@@ -300,7 +327,16 @@ function renderDiffButtons(st) {
   });
 }
 
+// 記録ボタンの連打よけ。once()は「応答が返る前の連打」しか止められず、
+// サーバーが速いと2回目のタップが正規の2件目として通ってしまう。
+// 1件の検査が0.7秒で終わることは無いので、この間隔の2発目は取りこぼしでなく誤タップとみなす
+let lastRecordAt = 0;
+
 async function recordInspection(difficulty) {
+  const now = Date.now();
+  if (now - lastRecordAt < 700) return;
+  lastRecordAt = now;
+  return once('record', async () => {
   try {
     const r = await api('/api/inspections', { method: 'POST', body: { difficulty } });
     applyStatus(r.status);
@@ -311,9 +347,10 @@ async function recordInspection(difficulty) {
   } catch (e) {
     showToast($('#toast'), e.message, false);
   }
+  });
 }
 
-$('#undoBtn').addEventListener('click', async () => {
+$('#undoBtn').addEventListener('click', () => once('undo', async () => {
   try {
     const r = await api('/api/undo', { method: 'POST' });
     applyStatus(r.status);
@@ -322,7 +359,7 @@ $('#undoBtn').addEventListener('click', async () => {
   } catch (e) {
     showToast($('#toast'), e.message, false);
   }
-});
+}));
 
 // キャラのひとことセリフ
 const SAY_LINES = {
@@ -350,6 +387,7 @@ function greeting() {
 }
 
 async function postEvent(type) {
+  return once('event', async () => {
   try {
     const r = await api('/api/events', { method: 'POST', body: { type } });
     applyStatus(r.status);
@@ -364,6 +402,7 @@ async function postEvent(type) {
   } catch (e) {
     showToast($('#toast'), e.message, false);
   }
+  });
 }
 $('#btnWorkStart').addEventListener('click', () => postEvent('work_start'));
 $('#btnWorkEnd').addEventListener('click', () =>
@@ -393,11 +432,16 @@ async function loadTodayList() {
   if (!todayCard.open) return; // 折りたたみ中は取得しない(開いた瞬間に取得する)
   // 実効日+effective=1: 0時をまたいでも退勤までは前日からの続きを一覧に出す
   const base = lastStatus?.effectiveDay || todayStr();
-  const { inspections } = await api('/api/day?date=' + base + '&effective=1');
   const wrap = $('#todayList');
-  wrap.innerHTML = inspections.length ? '' : '<p class="muted">まだ記録がありません</p>';
-  for (const r of [...inspections].reverse()) {
-    wrap.appendChild(inspectionRow(r, false));
+  try {
+    const { inspections } = await api('/api/day?date=' + base + '&effective=1');
+    wrap.innerHTML = inspections.length ? '' : '<p class="muted">まだ記録がありません</p>';
+    for (const r of [...inspections].reverse()) {
+      wrap.appendChild(inspectionRow(r, false));
+    }
+  } catch (e) {
+    // 失敗を黙って握らない(古い一覧が残ったままだと、消したはずの記録が見えるなど誤解の元になる)
+    wrap.innerHTML = `<p class="muted">読み込めませんでした: ${esc(e.message)}</p>`;
   }
 }
 
@@ -422,17 +466,34 @@ function difficultySelect(current) {
   return sel;
 }
 
+// 時刻の編集欄。確定は「欄を離れたとき(またはEnter)」だけにする。
+// <input type="time"> の change は値が一度でも成立するたびに飛ぶため、
+// change で保存すると「時」の1桁目を打った瞬間に保存され(例: 11:37 → 0を打つと 01:37 で保存)、
+// 保存後の再描画で入力欄ごと作り直されてカーソルまで飛ぶ。
+// 空にしただけ・変えていない場合は送らない(空欄は 0:00 として保存されてしまうため)。
+function timeEditInput(value, onCommit) {
+  const t = document.createElement('input');
+  t.type = 'time'; // 秒は表示しない(編集すると秒は00になる)
+  t.value = value;
+  let committed = value;
+  t.addEventListener('blur', () => {
+    if (!t.value) { t.value = committed; return; }
+    if (t.value === committed) return;
+    committed = t.value;
+    onCommit(t.value);
+  });
+  t.addEventListener('keydown', e => { if (e.key === 'Enter') t.blur(); });
+  return t;
+}
+
 function inspectionRow(r, withTimeEdit) {
   const row = document.createElement('div');
   row.className = 'rec-row';
 
   if (withTimeEdit) {
-    const t = document.createElement('input');
-    t.type = 'time'; // 秒は表示しない(編集すると秒は00になる)
     const d = new Date(r.ended_at);
-    t.value = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
-    t.addEventListener('change', () => patchInspection(r.id, { ended_at: timeToMs(currentEditDate(), t.value) }));
-    row.appendChild(t);
+    row.appendChild(timeEditInput(`${pad2(d.getHours())}:${pad2(d.getMinutes())}`,
+      v => patchInspection(r.id, { ended_at: timeToMs(currentEditDate(), v) })));
   } else {
     const t = document.createElement('span');
     t.className = 'rec-time';
@@ -504,7 +565,14 @@ $('#editNext').addEventListener('click', () => shiftEditDate(1));
 async function loadEditDay() {
   if (!$('#editDate').value) $('#editDate').value = todayStr();
   const day = currentEditDate();
-  const { inspections, events } = await api('/api/day?date=' + day);
+  let inspections, events;
+  try {
+    ({ inspections, events } = await api('/api/day?date=' + day));
+  } catch (e) {
+    // 取得に失敗したら前の日の一覧を残さない(別の日の記録を編集してしまうのを防ぐ)
+    $('#editList').innerHTML = `<p class="muted">読み込めませんでした: ${esc(e.message)}</p>`;
+    return;
+  }
 
   // 作業記録とイベントを分けず、1本の時系列リストにして表示する(ユーザー指定)
   const items = [
@@ -531,13 +599,10 @@ function eventRow(ev, day) {
   const row = document.createElement('div');
   row.className = 'rec-row';
 
-  // 作業記録と同じ「時刻→内容」の並び(ユーザー指定)。秒は表示しない(編集すると秒は00になる)
-  const t = document.createElement('input');
-  t.type = 'time';
+  // 作業記録と同じ「時刻→内容」の並び(ユーザー指定)。確定は欄を離れたときだけ(timeEditInput)
   const d = new Date(ev.at);
-  t.value = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
-  t.addEventListener('change', () => patchEvent(ev.id, { at: timeToMs(day, t.value) }));
-  row.appendChild(t);
+  row.appendChild(timeEditInput(`${pad2(d.getHours())}:${pad2(d.getMinutes())}`,
+    v => patchEvent(ev.id, { at: timeToMs(day, v) })));
 
   const sel = document.createElement('select');
   sel.className = 'sel-ev';
@@ -591,7 +656,7 @@ function needInput(el, msg) {
   setTimeout(() => el.classList.remove('need-input'), 2500);
 }
 
-$('#addInspBtn').addEventListener('click', async () => {
+$('#addInspBtn').addEventListener('click', () => once('addInsp', async () => {
   const t = $('#addInspTime').value;
   if (!t) return needInput($('#addInspTime'), '時刻を入力してください');
   try {
@@ -606,9 +671,9 @@ $('#addInspBtn').addEventListener('click', async () => {
     showToast($('#toast'), '記録を追加しました');
     refreshAfterEdit();
   } catch (e) { showToast($('#toast'), e.message, false); }
-});
+}));
 
-$('#addEvBtn').addEventListener('click', async () => {
+$('#addEvBtn').addEventListener('click', () => once('addEv', async () => {
   const t = $('#addEvTime').value;
   if (!t) return needInput($('#addEvTime'), '時刻を入力してください');
   try {
@@ -621,7 +686,7 @@ $('#addEvBtn').addEventListener('click', async () => {
     showToast($('#toast'), 'イベントを追加しました');
     refreshAfterEdit();
   } catch (e) { showToast($('#toast'), e.message, false); }
-});
+}));
 
 // ================= アラート =================
 
@@ -1639,8 +1704,13 @@ function breaksScatter(sessions) {
 
 // ================= 設定 =================
 
+// 直近にサーバーから読んだ設定。数値欄を空のまま離れたとき、表示をここから戻す
+// (保存はしていないのに欄だけ空で残ると、その設定が消えたように見えるため)
+let loadedSettings = null;
+
 async function loadSettingsForm() {
   const s = await api('/api/settings');
+  loadedSettings = s;
   const wrap = $('#setDiffList');
   wrap.innerHTML = '';
   s.difficulties.forEach(d => wrap.appendChild(diffSettingRow(d)));
@@ -1780,15 +1850,16 @@ function renderCharPreview() {
   const files = charSets[name] || {};
   const states = ['idle', 'happy', 'stretch', 'rest'];
   $('#charPreview').innerHTML = note + states.map(st => {
+    // ファイル名(=自分で置いたフォルダ名)がそのまま属性に入るので、引用符を含む名前でも壊れないようにする
     const src = files[st]?.[0] || placeholderSvg(st);
-    return `<figure><img src="${src}" alt="${st}"><figcaption>${st}</figcaption></figure>`;
+    return `<figure><img src="${esc(src)}" alt="${st}"><figcaption>${st}</figcaption></figure>`;
   }).join('');
 }
 
 $('#backupBtn').addEventListener('click', async () => {
   const out = $('#dataToolResult');
   try {
-    const r = await api('/api/backup', { method: 'POST' });
+    const r = await api('/api/backup', { method: 'POST', timeout: 60000 });
     out.textContent = `✅ バックアップを作成しました: ${r.file}(${Math.round(r.size / 1024)} KB)`;
     loadBackupList();
   } catch (e) { out.textContent = `⚠ バックアップに失敗しました: ${e.message}`; }
@@ -1820,7 +1891,7 @@ $('#restoreBtn').addEventListener('click', async () => {
 
   try {
     out.textContent = '復元しています…';
-    const r = await api('/api/restore', { method: 'POST', body: { file } });
+    const r = await api('/api/restore', { method: 'POST', body: { file }, timeout: 60000 });
     out.textContent = `✅ 復元しました(記録 ${r.inspections}件・イベント ${r.events}件)。復元前の状態は ${r.safety} に保存済み。画面を更新します…`;
     setTimeout(() => location.reload(), 1500);
   } catch (e) { out.textContent = `⚠ 復元に失敗しました: ${e.message}`; }
@@ -1829,7 +1900,7 @@ $('#restoreBtn').addEventListener('click', async () => {
 $('#healthBtn').addEventListener('click', async () => {
   const out = $('#dataToolResult');
   try {
-    const r = await api('/api/health');
+    const r = await api('/api/health', { timeout: 60000 });
     const okMark = r.integrity === 'ok' ? '✅ 整合性OK' : `⚠ 整合性: ${r.integrity}`;
     const latest = r.backups.length ? `最新バックアップ ${r.backups[0]}` : 'バックアップはまだありません';
     out.textContent = `${okMark} / 記録 ${r.inspections}件・イベント ${r.events}件 / DB ${Math.round(r.dbSize / 1024)} KB / ${latest}`;
@@ -1847,20 +1918,45 @@ async function saveSettingsNow() {
     // 追加直後でラベル未入力の行は保存対象にしない(ラベルを入れた時点で保存される)
     .filter(d => d.label || known.has(d.key))
     .map(d => ({ ...d, label: d.label || '?' }));
-  const body = {
-    difficulties,
-    alertFixedMin: Number($('#setFixedMin').value) || 50,
-    fatigueThreshold: Number($('#setThreshold').value) || 15,
-    fatiguePer10Min: Number($('#setPer10').value) || 0,
-    snoozeMin: Number($('#setSnooze').value) || 5,
-    forgetMin: Math.max(0, Number($('#setForgetMin').value) || 0),
-    sleepPromptHour: Number($('#setSleepPrompt').value),
-    maWindow: Number($('#setMaWindow').value) || 5,
-    minSamples: Number($('#setMinSamples').value) || 5,
-  };
+  // 空欄・数値でない欄は「送らない」= サーバーの今の値をそのまま残す。
+  // Number('') は 0 になるため、そのまま送ると欄を消しただけで設定が
+  // 既定値や0へ黙って書き換わってしまう(「空」と「不正」を区別する)
+  const skipped = [];
+  function num(sel, label, key) {
+    const el = $(sel);
+    const raw = el.value.trim();
+    const n = Number(raw);
+    if (raw === '' || !Number.isFinite(n)) {
+      el.classList.add('need-input');
+      setTimeout(() => el.classList.remove('need-input'), 2500);
+      // 表示も今の値に戻す。空のまま残すと「消えた」ように見える(実際は保存していない)
+      const cur = loadedSettings?.[key] ?? lastStatus?.settings?.[key];
+      if (cur !== undefined) el.value = String(cur);
+      skipped.push(label);
+      return undefined;
+    }
+    return n;
+  }
+  const body = { difficulties };
+  const fields = [
+    ['alertFixedMin', '#setFixedMin', 'アラートの分数'],
+    ['fatigueThreshold', '#setThreshold', '疲労度のしきい値'],
+    ['fatiguePer10Min', '#setPer10', '10分ごとの加算'],
+    ['snoozeMin', '#setSnooze', 'スヌーズ'],
+    ['forgetMin', '#setForgetMin', '押し忘れ確認'],
+    ['sleepPromptHour', '#setSleepPrompt', '就寝を促す時刻'],
+    ['maWindow', '#setMaWindow', '移動平均の件数'],
+    ['minSamples', '#setMinSamples', '参考値の件数'],
+  ];
+  for (const [key, sel, label] of fields) {
+    const v = num(sel, label, key);
+    if (v !== undefined) body[key] = v;
+  }
   try {
     await api('/api/settings', { method: 'PUT', body });
-    showToast($('#saveToast'), '保存しました');
+    showToast($('#saveToast'), skipped.length
+      ? `保存しました(${skipped.join('・')}は空だったので前の値のままです)`
+      : '保存しました', skipped.length === 0);
     diffButtonsKey = '';
     await refreshStatus();
   } catch (e) {

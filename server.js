@@ -98,8 +98,12 @@ function readBody(req) {
       if (buf.length > 1e6) reject(new Error('body too large'));
     });
     req.on('end', () => {
-      try { resolve(buf ? JSON.parse(buf) : {}); }
-      catch { reject(new Error('invalid JSON')); }
+      try {
+        const v = buf ? JSON.parse(buf) : {};
+        // JSONは object とは限らない(配列・数値・null もありうる)。
+        // そのまま body.xxx を読むと undefined 扱いで意図しない既定値が通るため、空扱いにする
+        resolve(v && typeof v === 'object' && !Array.isArray(v) ? v : {});
+      } catch { reject(new Error('invalid JSON')); }
     });
     req.on('error', reject);
   });
@@ -107,6 +111,32 @@ function readBody(req) {
 
 function difficultyKeys() {
   return L.getSettings().difficulties.map(d => d.key);
+}
+
+// ---- 入力の検証 ----
+// 時刻(ミリ秒)は 2000-01-01 〜 現在+1年 の整数だけ受け付ける。範囲外を素通しすると、
+// 記録が1970年へ飛んだり(null→0)、JSの安全整数を超える値がDBに入って
+// 以後その行を読むAPIが全部500になる(=UIから復旧できなくなる)ため、ここで弾く。
+const TIME_MIN = new Date(2000, 0, 1).getTime();
+function validTime(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return null;
+  const t = Math.round(n);
+  if (t < TIME_MIN || t > Date.now() + 366 * 86400000) return null;
+  return t;
+}
+
+// 'YYYY-MM-DD' 以外の日付パラメータは受け付けない(空・未指定は既定日にフォールバック)
+function validDay(v) {
+  if (!v) return '';
+  return /^\d{4}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(new Date(v).getTime()) ? v : null;
+}
+
+// メモなどの文字列。長さを切り、NUL・制御文字は落とす(CSV出力や表示が壊れるため)。
+// 配列・オブジェクトは "[object Object]" のような文字列にせず、空にする
+function textOf(v, max = 2000) {
+  if (v == null || typeof v === 'object') return '';
+  return String(v).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '').slice(0, max);
 }
 
 // WALを本体に反映してから backups/ へ複製し、ファイル名を返す。
@@ -152,7 +182,9 @@ async function handleApi(req, res, url) {
   }
 
   if (p === '/api/day' && method === 'GET') {
-    const day = url.searchParams.get('date') || L.dayStr(Date.now());
+    const dayParam = validDay(url.searchParams.get('date'));
+    if (dayParam === null) return json(res, 400, { error: '日付が不正です' });
+    const day = dayParam || L.dayStr(Date.now());
     // effective=1: 0時またぎの勤務を開始日側に含めた範囲(メイン画面の「本日の記録一覧」用)。
     // 省略時は暦日どおり(記録タブの編集画面用)
     const [s, e] = url.searchParams.get('effective') === '1' ? L.effectiveRange(day) : L.dayRange(day);
@@ -170,10 +202,11 @@ async function handleApi(req, res, url) {
     if (!difficultyKeys().includes(body.difficulty)) {
       return json(res, 400, { error: '不明な難易度です' });
     }
-    const at = Number(body.at) || Date.now();
+    const at = body.at === undefined || body.at === null ? Date.now() : validTime(body.at);
+    if (at === null) return json(res, 400, { error: '時刻が不正です' });
     const info = db.prepare(
       'INSERT INTO inspections (ended_at, difficulty, note, created_at) VALUES (?, ?, ?, ?)'
-    ).run(at, body.difficulty, String(body.note || ''), Date.now());
+    ).run(at, body.difficulty, textOf(body.note), Date.now());
     L.recomputeDay(L.dayStr(at));
     const row = db.prepare('SELECT * FROM inspections WHERE id = ?').get(info.lastInsertRowid);
     return json(res, 201, { inspection: row, status: L.computeStatus() });
@@ -188,8 +221,12 @@ async function handleApi(req, res, url) {
       const body = await readBody(req);
       const difficulty = body.difficulty !== undefined ? body.difficulty : row.difficulty;
       if (!difficultyKeys().includes(difficulty)) return json(res, 400, { error: '不明な難易度です' });
-      const endedAt = body.ended_at !== undefined ? Number(body.ended_at) : row.ended_at;
-      const note = body.note !== undefined ? String(body.note) : row.note;
+      let endedAt = row.ended_at;
+      if (body.ended_at !== undefined) {
+        endedAt = validTime(body.ended_at);
+        if (endedAt === null) return json(res, 400, { error: '時刻が不正です' });
+      }
+      const note = body.note !== undefined ? textOf(body.note) : row.note;
       db.prepare('UPDATE inspections SET ended_at = ?, difficulty = ?, note = ? WHERE id = ?')
         .run(endedAt, difficulty, note, id);
       L.recomputeDay(L.dayStr(row.ended_at));
@@ -218,7 +255,8 @@ async function handleApi(req, res, url) {
   if (p === '/api/events' && method === 'POST') {
     const body = await readBody(req);
     if (!L.EVENT_TYPES.includes(body.type)) return json(res, 400, { error: '不明なイベント種別です' });
-    const at = Number(body.at) || Date.now();
+    const at = body.at === undefined || body.at === null ? Date.now() : validTime(body.at);
+    if (at === null) return json(res, 400, { error: '時刻が不正です' });
     // その日最初の勤務開始なら自動バックアップ(挿入前に判定し、挿入後に作成)
     let firstStartOfDay = false;
     if (body.type === 'work_start') {
@@ -227,7 +265,7 @@ async function handleApi(req, res, url) {
         "SELECT id FROM work_events WHERE deleted = 0 AND type = 'work_start' AND at >= ? AND at < ? LIMIT 1"
       ).get(ds, de);
     }
-    const info = db.prepare('INSERT INTO work_events (type, at, note) VALUES (?, ?, ?)').run(body.type, at, String(body.note || ''));
+    const info = db.prepare('INSERT INTO work_events (type, at, note) VALUES (?, ?, ?)').run(body.type, at, textOf(body.note));
     L.recomputeDay(L.dayStr(at));
     if (firstStartOfDay) {
       try { makeBackup(); } catch (e) { console.log(`  warn: auto backup failed (${e.message})`); }
@@ -245,8 +283,12 @@ async function handleApi(req, res, url) {
       const body = await readBody(req);
       const type = body.type !== undefined ? body.type : row.type;
       if (!L.EVENT_TYPES.includes(type)) return json(res, 400, { error: '不明なイベント種別です' });
-      const at = body.at !== undefined ? Number(body.at) : row.at;
-      const note = body.note !== undefined ? String(body.note) : row.note;
+      let at = row.at;
+      if (body.at !== undefined) {
+        at = validTime(body.at);
+        if (at === null) return json(res, 400, { error: '時刻が不正です' });
+      }
+      const note = body.note !== undefined ? textOf(body.note) : row.note;
       db.prepare('UPDATE work_events SET type = ?, at = ?, note = ? WHERE id = ?').run(type, at, note, id);
       L.recomputeDay(L.dayStr(row.at));
       if (L.dayStr(at) !== L.dayStr(row.at)) L.recomputeDay(L.dayStr(at));
@@ -260,21 +302,28 @@ async function handleApi(req, res, url) {
   }
 
   if (p === '/api/stats/day' && method === 'GET') {
-    const day = url.searchParams.get('date') || L.dayStr(Date.now());
-    return json(res, 200, L.statsDay(day));
+    const d = validDay(url.searchParams.get('date'));
+    if (d === null) return json(res, 400, { error: '日付が不正です' });
+    return json(res, 200, L.statsDay(d || L.dayStr(Date.now())));
   }
 
   if (p === '/api/result' && method === 'GET') {
     // 既定日は「最後に勤務開始した日」(0時またぎで退勤した直後でも前日のリザルトを出す)
-    const day = url.searchParams.get('date') || L.lastWorkDayStr();
-    return json(res, 200, L.dailyResult(day));
+    const d = validDay(url.searchParams.get('date'));
+    if (d === null) return json(res, 400, { error: '日付が不正です' });
+    return json(res, 200, L.dailyResult(d || L.lastWorkDayStr()));
   }
 
   if (p === '/api/stats/range' && method === 'GET') {
-    const to = url.searchParams.get('to') || L.dayStr(Date.now());
-    const days = Number(url.searchParams.get('days') || 7);
-    const from = url.searchParams.get('from')
-      || L.dayStr(L.dayRange(to)[0] - (days - 1) * 86400000);
+    const toParam = validDay(url.searchParams.get('to'));
+    const fromParam = validDay(url.searchParams.get('from'));
+    if (toParam === null || fromParam === null) return json(res, 400, { error: '日付が不正です' });
+    const to = toParam || L.dayStr(Date.now());
+    // 日数は1〜1000にクランプ(未検証の値をそのまま使うと、10万日ぶんの空データを
+    // 生成して返そうとしてブラウザごと固まる)
+    const rawDays = Math.round(Number(url.searchParams.get('days') ?? 7));
+    const days = Number.isFinite(rawDays) ? Math.min(1000, Math.max(1, rawDays)) : 7;
+    const from = fromParam || L.dayStr(L.dayRange(to)[0] - (days - 1) * 86400000);
     return json(res, 200, L.statsRange(from, to));
   }
 
@@ -493,7 +542,10 @@ const handler = async (req, res) => {
       serveStatic(req, res, filePath, url.searchParams);
     }
   } catch (err) {
-    json(res, 500, { error: String(err.message || err) });
+    // 入力起因のものは 4xx で返す(500だとサーバー側の不具合と区別が付かない)
+    const msg = String(err.message || err);
+    const code = msg === 'invalid JSON' ? 400 : msg === 'body too large' ? 413 : 500;
+    json(res, code, { error: msg });
   }
 };
 
