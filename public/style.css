@@ -408,7 +408,9 @@ h3 { font-size: .9rem; margin: 18px 0 8px; color: var(--heading); }
 }
 .rec-row:last-child { border-bottom: none; }
 .rec-time { font-variant-numeric: tabular-nums; color: var(--muted); min-width: 54px; font-weight: 700; }
-.rec-dur { font-variant-numeric: tabular-nums; min-width: 50px; font-weight: 900; }
+/* 所要時間は右揃え。左揃えだと「9'59」と「29'08」で桁が縦に揃わずガタつく
+   (幅は50pxのまま=難易度70+gap8+所要50=イベント種別128 の対応を崩さない) */
+.rec-dur { font-variant-numeric: tabular-nums; min-width: 50px; text-align: right; font-weight: 900; }
 .rec-row select, .rec-row input[type="text"], .rec-row input[type="time"] {
   border: 2px solid var(--border); border-radius: 10px; padding: 5px 8px; font-size: .86rem;
   font-family: inherit; color: var(--text); background: var(--input-bg);
