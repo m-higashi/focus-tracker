@@ -214,13 +214,24 @@ export function recomputeDay(day) {
     if (inWork) boundary = x.ended_at;
   }
 
-  // 勤務が開いたまま日をまたいでいるなら、翌日の所要時間は今日の状態に依存するので連鎖して再計算
-  // (退勤で閉じた日で止まるので、実質1〜2日ぶん。今日より先へは進まない)
-  if (e <= Date.now() && openSessionAt(e) != null) {
-    const hasNext = db.prepare(
+  // 翌日の所要時間が今日の状態(シード)に依存するなら連鎖して再計算する。
+  // 依存するのは「翌日の最初のイベントより前にある記録」= シードの勤務状態と起点で計算される記録。
+  // ⚠ 「勤務が開いたままの場合だけ」連鎖すると、前日の閉じ忘れ勤務に後から退勤を入れた瞬間
+  //   (開→閉に変わった瞬間)に連鎖せず、翌日の記録に前日起点の巨大な所要時間が残ってしまう
+  //   (中央値・統計を汚染する)。開→閉/閉→開のどちらの変化でも連鎖させる。
+  // (シード依存の記録がない日で止まるので実質1〜2日ぶん。今日より先へは進まない)
+  if (e <= Date.now()) {
+    const nextEvAt = db.prepare(
+      'SELECT at FROM work_events WHERE deleted = 0 AND at >= ? AND at < ? ORDER BY at, id LIMIT 1'
+    ).get(e, e + 86400000)?.at;
+    const hasSeedDep = db.prepare(
+      'SELECT id FROM inspections WHERE deleted = 0 AND ended_at >= ? AND ended_at < ? LIMIT 1'
+    ).get(e, nextEvAt ?? e + 86400000);
+    // 従来の「開いたまま+翌日に記録あり」も残す(イベント後の記録しかない日でも安全側で再計算)
+    const hasNext = hasSeedDep || db.prepare(
       'SELECT id FROM inspections WHERE deleted = 0 AND ended_at >= ? AND ended_at < ? LIMIT 1'
     ).get(e, e + 86400000);
-    if (hasNext) recomputeDay(dayStr(e));
+    if (hasSeedDep || (openSessionAt(e) != null && hasNext)) recomputeDay(dayStr(e));
   }
 }
 

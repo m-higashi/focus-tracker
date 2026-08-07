@@ -126,10 +126,15 @@ function validTime(v) {
   return t;
 }
 
-// 'YYYY-MM-DD' 以外の日付パラメータは受け付けない(空・未指定は既定日にフォールバック)
+// 'YYYY-MM-DD' 以外の日付パラメータは受け付けない(空・未指定は既定日にフォールバック)。
+// 2026-02-31 のような実在しない日付は Date が3月3日へ繰り上げてNaNにならないため、
+// 組み立て直して往復一致することまで確認する(ズレたラベルのままデータを返さない)
 function validDay(v) {
   if (!v) return '';
-  return /^\d{4}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(new Date(v).getTime()) ? v : null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return null;
+  const [y, m, d] = v.split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  return dt.getFullYear() === y && dt.getMonth() === m - 1 && dt.getDate() === d ? v : null;
 }
 
 // メモなどの文字列。長さを切り、NUL・制御文字は落とす(CSV出力や表示が壊れるため)。
@@ -143,17 +148,34 @@ function textOf(v, max = 2000) {
 // 作成のたびに古いものを間引いて直近30個だけ保持する(自動+手動+復元前退避の合計)
 const BACKUP_KEEP = 30;
 
-function makeBackup() {
-  const d = new Date();
+function backupName(ms) {
+  const d = new Date(ms);
   const pad = n => String(n).padStart(2, '0');
-  const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+  return `focus-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-`
+       + `${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.db`;
+}
+
+// protect: ローテーションで消してはいけないファイル名(復元時に復元対象を守る)
+function makeBackup(protect = null) {
   const dir = path.join(ROOT, 'backups');
   fs.mkdirSync(dir, { recursive: true });
-  const name = `focus-${stamp}.db`;
+  // 名前は秒単位。同じ秒に2回作ると衝突するので、空いている秒までずらす。
+  // ⚠ 上書きを許すと、復元時の「復元前の自動退避」が**復元しようとしているファイル自体**を
+  //   潰してしまい、復元しても何も変わらない(しかも元の控えが消える)という事故になる
+  let t = Date.now();
+  let name = backupName(t);
+  while (fs.existsSync(path.join(dir, name))) {
+    t += 1000;
+    name = backupName(t);
+  }
   db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
   fs.copyFileSync(DB_PATH, path.join(dir, name));
   const all = fs.readdirSync(dir).filter(f => /^focus-\d{8}-\d{6}\.db$/.test(f)).sort().reverse();
   for (const f of all.slice(BACKUP_KEEP)) {
+    // ⚠ 30個の上限に達した状態で「一番古いバックアップ」へ復元すると、復元前の自動退避で
+    //   31個目ができ、ここのローテーションが最古=復元対象そのものを消してしまう
+    //   (その後のATTACHが同名の空DBを作るので、元のバックアップは0バイトに化けて消失する)
+    if (f === protect) continue;
     try { fs.unlinkSync(path.join(dir, f)); } catch { /* 消せなくても本体処理は続行 */ }
   }
   return name;
@@ -219,8 +241,12 @@ async function handleApi(req, res, url) {
     if (!row) return json(res, 404, { error: '記録が見つかりません' });
     if (method === 'PATCH') {
       const body = await readBody(req);
+      // 難易度の検証は「変更しようとしたとき」だけ。既存値まで検証すると、設定から削除した
+      // 難易度が付いた過去の記録のメモ・時刻すら直せなくなる(既存値はそのまま持ち続けてよい)
+      if (body.difficulty !== undefined && !difficultyKeys().includes(body.difficulty)) {
+        return json(res, 400, { error: '不明な難易度です' });
+      }
       const difficulty = body.difficulty !== undefined ? body.difficulty : row.difficulty;
-      if (!difficultyKeys().includes(difficulty)) return json(res, 400, { error: '不明な難易度です' });
       let endedAt = row.ended_at;
       if (body.ended_at !== undefined) {
         endedAt = validTime(body.ended_at);
@@ -376,7 +402,8 @@ async function handleApi(req, res, url) {
     const bakPath = path.join(ROOT, 'backups', name);
     if (!fs.existsSync(bakPath)) return json(res, 404, { error: 'backup not found' });
 
-    const safety = makeBackup(); // 復元前の状態も自動退避(復元自体をやり直せるように)
+    // 復元前の状態も自動退避(復元自体をやり直せるように)。復元対象はローテーションから保護する
+    const safety = makeBackup(name);
     db.exec(`ATTACH DATABASE '${bakPath.replaceAll("'", "''")}' AS bak`);
     try {
       const integ = Object.values(db.prepare('PRAGMA bak.integrity_check').get())[0];

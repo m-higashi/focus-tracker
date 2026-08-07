@@ -285,6 +285,7 @@ function renderMain() {
   const bs = $('#btnBreakStart'), be = $('#btnBreakEnd'), we = $('#btnWorkEnd');
   const mode = offDuty ? 'sleep' : 'break';
   if (bs.dataset.mode !== mode) {
+    weModeSwitchedAt = Date.now(); // 勤務終了⇄移動の切替時刻(2度押しで移動が誤発動するのを防ぐ)
     bs.dataset.mode = mode;
     be.dataset.mode = mode;
     we.dataset.mode = offDuty ? 'travel' : 'end';
@@ -350,7 +351,15 @@ async function recordInspection(difficulty) {
   });
 }
 
-$('#undoBtn').addEventListener('click', () => once('undo', async () => {
+// 取消も記録ボタンと同じ時間ガードを敷く。once()は応答後の2発目を止められないため、
+// 素早い2度押しで直近2件が消えてしまう(削除済みの記録をUIから戻す手段はない)
+let lastUndoAt = 0;
+
+$('#undoBtn').addEventListener('click', () => {
+  const now = Date.now();
+  if (now - lastUndoAt < 700) return;
+  lastUndoAt = now;
+  return once('undo', async () => {
   try {
     const r = await api('/api/undo', { method: 'POST' });
     applyStatus(r.status);
@@ -359,7 +368,8 @@ $('#undoBtn').addEventListener('click', () => once('undo', async () => {
   } catch (e) {
     showToast($('#toast'), e.message, false);
   }
-}));
+  });
+});
 
 // キャラのひとことセリフ
 const SAY_LINES = {
@@ -405,8 +415,17 @@ async function postEvent(type) {
   });
 }
 $('#btnWorkStart').addEventListener('click', () => postEvent('work_start'));
-$('#btnWorkEnd').addEventListener('click', () =>
-  $('#btnWorkEnd').dataset.mode === 'travel' ? toggleHolidayBg() : postEvent('work_end'));
+
+// 勤務終了ボタンは応答後に「🚙移動」へ切り替わるため、2度押しの2発目が移動として通り
+// 背景が平日⇄休日に切り替わってしまう。モード切替直後の移動タップは捨てる
+let weModeSwitchedAt = 0;
+$('#btnWorkEnd').addEventListener('click', () => {
+  if ($('#btnWorkEnd').dataset.mode === 'travel') {
+    if (Date.now() - weModeSwitchedAt < 1000) return;
+    return toggleHolidayBg();
+  }
+  return postEvent('work_end');
+});
 
 // 勤務外の「移動🚙」: 自動背景を平日版⇄休日版で切り替える(設定はサーバー保存なので全端末に反映)
 async function toggleHolidayBg() {
@@ -463,6 +482,15 @@ function difficultySelect(current) {
     if (d.key === current) o.selected = true;
     sel.appendChild(o);
   }
+  // 設定から削除された難易度が付いた記録は、実際の値をそのまま見せる。
+  // 該当optionが無いとブラウザは先頭の難易度を選んで見せるため、表示と実データが食い違う
+  if (current && !lastStatus.settings.difficulties.some(d => d.key === current)) {
+    const o = document.createElement('option');
+    o.value = current;
+    o.textContent = `${current}(削除済み)`;
+    o.selected = true;
+    sel.appendChild(o);
+  }
   return sel;
 }
 
@@ -476,11 +504,17 @@ function timeEditInput(value, onCommit) {
   t.type = 'time'; // 秒は表示しない(編集すると秒は00になる)
   t.value = value;
   let committed = value;
-  t.addEventListener('blur', () => {
+  t.addEventListener('blur', async () => {
     if (!t.value) { t.value = committed; return; }
     if (t.value === committed) return;
+    const prev = committed;
     committed = t.value;
-    onCommit(t.value);
+    // 保存に失敗したら表示と確定値を巻き戻す。新しい時刻を出したままにすると
+    // 「保存済み」に見えてしまう(実データは古いまま=嘘の表示になる)
+    if (await onCommit(t.value) === false) {
+      committed = prev;
+      t.value = prev;
+    }
   });
   t.addEventListener('keydown', e => { if (e.key === 'Enter') t.blur(); });
   return t;
@@ -532,11 +566,16 @@ function inspectionRow(r, withTimeEdit) {
   return row;
 }
 
+// 成否を返す(時刻編集欄が失敗時に表示を巻き戻すため)
 async function patchInspection(id, body) {
   try {
     await api(`/api/inspections/${id}`, { method: 'PATCH', body });
     refreshAfterEdit();
-  } catch (e) { showToast($('#toast'), e.message, false); }
+    return true;
+  } catch (e) {
+    showToast($('#toast'), e.message, false);
+    return false;
+  }
 }
 
 function refreshAfterEdit() {
@@ -634,11 +673,16 @@ function eventRow(ev, day) {
   return row;
 }
 
+// 成否を返す(時刻編集欄が失敗時に表示を巻き戻すため)
 async function patchEvent(id, body) {
   try {
     await api(`/api/events/${id}`, { method: 'PATCH', body });
     refreshAfterEdit();
-  } catch (e) { showToast($('#toast'), e.message, false); }
+    return true;
+  } catch (e) {
+    showToast($('#toast'), e.message, false);
+    return false;
+  }
 }
 
 // 追加行の難易度セレクトも選択中の難易度色で表示(既存行と同じ見た目)
@@ -1142,7 +1186,7 @@ function concentrationChart(items, breaks = [], resumes = [], offs = []) {
     s += `<polyline fill="none" stroke="var(--text)" stroke-width="3" stroke-linejoin="round" opacity=".9" points="${seg.map(p => `${xt(p.ended_at).toFixed(1)},${ys(p.ma)}`).join(' ')}"/>`;
   }
   // 点は控えめ(小さめ・半透明)にして移動平均線を主役にする
-  s += pts.map(p => `<circle cx="${xt(p.ended_at).toFixed(1)}" cy="${ys(p.index)}" r="3" opacity=".65" fill="${diffColor(p.difficulty)}"><title>${fmtTime(p.ended_at)} ${diffLabel(p.difficulty)} ${p.index}</title></circle>`).join('');
+  s += pts.map(p => `<circle cx="${xt(p.ended_at).toFixed(1)}" cy="${ys(p.index)}" r="3" opacity=".65" fill="${diffColor(p.difficulty)}"><title>${fmtTime(p.ended_at)} ${esc(diffLabel(p.difficulty))} ${p.index}</title></circle>`).join('');
   s += `</svg>`;
   return s;
 }
@@ -1339,7 +1383,7 @@ function monthlyBarChart(months, diffs) {
     const segs = diffs.map(df => ({ df, c: m.counts[df.key] || 0 })).filter(v => v.c);
     segs.forEach((v, si) => {
       const y1 = ys(acc + v.c), y0 = ys(acc);
-      s += `<path d="${barPath(x, y1, bw * 0.7, y0 - y1, si === segs.length - 1 ? 2 : 0, si === 0 ? 2 : 0)}" fill="${diffColor(v.df.key)}"><title>${m.ym.replace('-', '/')} ${v.df.label}: ${v.c}件</title></path>`;
+      s += `<path d="${barPath(x, y1, bw * 0.7, y0 - y1, si === segs.length - 1 ? 2 : 0, si === 0 ? 2 : 0)}" fill="${diffColor(v.df.key)}"><title>${m.ym.replace('-', '/')} ${esc(v.df.label)}: ${v.c}件</title></path>`;
       acc += v.c;
     });
   });
@@ -1375,7 +1419,7 @@ function monthlyDurationChart(months, diffs) {
   // 難易度色の点のみ(線では繋がない=ユーザー指定。週/月版と同じ)
   for (const df of diffs) {
     const pts = months.map((m, i) => ({ i, v: avg(m, df.key) })).filter(p => p.v != null);
-    s += pts.map(p => `<circle cx="${xs(p.i).toFixed(1)}" cy="${ys(p.v / 60).toFixed(1)}" r="3.5" fill="${diffColor(df.key)}"><title>${months[p.i].ym.replace('-', '/')} ${df.label}: ${fmtDur(Math.round(p.v))}</title></circle>`).join('');
+    s += pts.map(p => `<circle cx="${xs(p.i).toFixed(1)}" cy="${ys(p.v / 60).toFixed(1)}" r="3.5" fill="${diffColor(df.key)}"><title>${months[p.i].ym.replace('-', '/')} ${esc(df.label)}: ${fmtDur(Math.round(p.v))}</title></circle>`).join('');
   }
   s += monthAxisLabels(months, xs, H);
   s += `</svg>`;
@@ -1548,7 +1592,7 @@ function gapScatter(gapPts, alertMin) {
   if (alertMin && alertMin <= xMax) {
     s += `<line x1="${xs(alertMin)}" y1="${T}" x2="${xs(alertMin)}" y2="${H - B}" stroke="var(--heading)" stroke-width="2" opacity=".8"/>`;
   }
-  s += gapPts.map(p => `<circle cx="${xs(p.gap).toFixed(1)}" cy="${ys(p.index).toFixed(1)}" r="4" fill="${diffColor(p.difficulty)}" opacity=".65"><title>連続${Math.round(p.gap)}分 ${diffLabel(p.difficulty)} ${p.index}</title></circle>`).join('');
+  s += gapPts.map(p => `<circle cx="${xs(p.gap).toFixed(1)}" cy="${ys(p.index).toFixed(1)}" r="4" fill="${diffColor(p.difficulty)}" opacity=".65"><title>連続${Math.round(p.gap)}分 ${esc(diffLabel(p.difficulty))} ${p.index}</title></circle>`).join('');
   s += `</svg>`;
   return s;
 }
@@ -1588,7 +1632,7 @@ function stackedBarChart(days, diffs) {
     segs.forEach((v, si) => {
       const y1 = ys(acc + v.c), y0 = ys(acc);
       const rTop = si === segs.length - 1 ? 2 : 0, rBot = si === 0 ? 2 : 0;
-      s += `<path d="${barPath(x, y1, bw * 0.7, y0 - y1, rTop, rBot)}" fill="${diffColor(v.df.key)}"><title>${d.day} ${v.df.label}: ${v.c}件</title></path>`;
+      s += `<path d="${barPath(x, y1, bw * 0.7, y0 - y1, rTop, rBot)}" fill="${diffColor(v.df.key)}"><title>${d.day} ${esc(v.df.label)}: ${v.c}件</title></path>`;
       acc += v.c;
     });
     // 週表示(7本以下)は全日ラベル、月表示は定規式(5日刻み)
@@ -1625,7 +1669,7 @@ function durationLinesChart(days, diffs) {
   // 難易度色の点のみ(線では繋がない=ユーザー指定)
   for (const df of diffs) {
     const pts = days.map((d, i) => ({ i, v: d.avgDur[df.key] })).filter(p => p.v != null);
-    s += pts.map(p => `<circle cx="${xs(p.i)}" cy="${ys(p.v / 60)}" r="3.5" fill="${diffColor(df.key)}"><title>${days[p.i].day} ${df.label}: ${fmtDur(p.v)}</title></circle>`).join('');
+    s += pts.map(p => `<circle cx="${xs(p.i)}" cy="${ys(p.v / 60)}" r="3.5" fill="${diffColor(df.key)}"><title>${days[p.i].day} ${esc(df.label)}: ${fmtDur(p.v)}</title></circle>`).join('');
   }
   s += dayAxisLabels(days, xs, W, H, L, R);
   s += `</svg>`;
@@ -1709,7 +1753,14 @@ function breaksScatter(sessions) {
 let loadedSettings = null;
 
 async function loadSettingsForm() {
-  const s = await api('/api/settings');
+  let s;
+  try {
+    s = await api('/api/settings');
+  } catch (e) {
+    // 失敗を黙って握らない(古い・空のフォームが「今の設定」に見えてしまう)
+    showToast($('#saveToast'), `設定を読み込めませんでした: ${e.message}`, false);
+    return;
+  }
   loadedSettings = s;
   const wrap = $('#setDiffList');
   wrap.innerHTML = '';
@@ -1909,19 +1960,30 @@ $('#healthBtn').addEventListener('click', async () => {
 
 // 設定は変更した瞬間に保存する(保存ボタンなし。押し忘れ事故を防ぐ)
 async function saveSettingsNow() {
-  const known = new Set((lastStatus?.settings.difficulties || []).map(d => d.key));
-  const difficulties = $$('#setDiffList .diff-setting-row').map(row => ({
-    key: row.dataset.key,
-    label: row.querySelector('.ds-label').value.trim(),
-    score: Number(row.querySelector('.ds-score').value) || 0,
-  }))
-    // 追加直後でラベル未入力の行は保存対象にしない(ラベルを入れた時点で保存される)
-    .filter(d => d.label || known.has(d.key))
-    .map(d => ({ ...d, label: d.label || '?' }));
   // 空欄・数値でない欄は「送らない」= サーバーの今の値をそのまま残す。
   // Number('') は 0 になるため、そのまま送ると欄を消しただけで設定が
   // 既定値や0へ黙って書き換わってしまう(「空」と「不正」を区別する)
   const skipped = [];
+  const known = new Set((lastStatus?.settings.difficulties || []).map(d => d.key));
+  // 疲労度加算の欄も同じ扱い: 空・非数値の行は前のscoreのまま送り、表示も戻す
+  const prevScore = Object.fromEntries(
+    (loadedSettings?.difficulties || lastStatus?.settings.difficulties || []).map(d => [d.key, d.score]));
+  const difficulties = $$('#setDiffList .diff-setting-row').map(row => {
+    const scoreEl = row.querySelector('.ds-score');
+    const raw = scoreEl.value.trim();
+    let score = Number(raw);
+    if (raw === '' || !Number.isFinite(score)) {
+      score = prevScore[row.dataset.key] ?? 1;
+      scoreEl.classList.add('need-input');
+      setTimeout(() => scoreEl.classList.remove('need-input'), 2500);
+      scoreEl.value = String(score);
+      if (!skipped.includes('疲労度加算')) skipped.push('疲労度加算');
+    }
+    return { key: row.dataset.key, label: row.querySelector('.ds-label').value.trim(), score };
+  })
+    // 追加直後でラベル未入力の行は保存対象にしない(ラベルを入れた時点で保存される)
+    .filter(d => d.label || known.has(d.key))
+    .map(d => ({ ...d, label: d.label || '?' }));
   function num(sel, label, key) {
     const el = $(sel);
     const raw = el.value.trim();
