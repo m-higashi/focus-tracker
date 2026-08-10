@@ -4,6 +4,10 @@ import { db, ROOT } from './db.js';
 
 export const EVENT_TYPES = ['work_start', 'work_end', 'break_start', 'break_end', 'sleep_start', 'sleep_end'];
 
+// キャラクターセットの「日替わりランダム」を表す特別値(assets/character/ の実フォルダ名ではない)。
+// public/app.js の DAILY_SET と同じ文字列。片方だけ変えないこと
+export const DAILY_SET = '__daily__';
+
 export const DEFAULT_SETTINGS = {
   difficulties: [
     { key: 'easy', label: '易', score: 1 },
@@ -61,6 +65,9 @@ function validateSetting(key, v, cur) {
     // 画像が出ない状態になり、原因も分かりにくいため)
     case 'characterSet': {
       if (typeof v !== 'string' || v.length > 200) throw new Error('characterSet が不正です');
+      // '__daily__'=日替わりランダム。実フォルダ名ではない特別値なので、実在チェックの前に通す
+      // (stageBg の 'auto' / 'auto_holiday' と同じ扱い)
+      if (v === DAILY_SET) return v;
       if (!Object.hasOwn(characterSets(), v)) throw new Error('そのキャラクターセットはありません');
       return v;
     }
