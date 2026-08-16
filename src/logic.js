@@ -707,14 +707,62 @@ export function exportEventsCSV() {
 // assets/character/ 直下のファイル → セット "default"、サブフォルダ → フォルダ名のセット。
 // ファイル名は idle / happy / stretch / rest で始まるもの(idle_01.png 等のバリエーション可)。
 // 日替わりランダムの「今日のセット」をサーバー側で決定する。
-// 端末ごとにキャラ一覧の読み込みタイミングが違っても、全端末で同じ結果になる
+// 端末ごとにキャラ一覧の読み込みタイミングが違っても、全端末で同じ結果になる。
+//
+// 方式は「シャッフルバッグ」: N人を1周期として、周期ごとに違う順へ並べ替え、その順に1人ずつ出す。
+// N日で全員がちょうど1回出る(出番ゼロの人が出ない)。並びは通日から一意に決まるので全端末で一致する。
+// ⚠ 以前は日付文字列の h=h*31+c を人数で割った余りで選んでいたが、
+//   31を人数で割った余りが1になる人数(15人・30人など)では桁の重みが消えてハッシュが
+//   「文字コードの単純な和」に退化し、月に4人が絶対に出ない・31人では21人が年間ゼロになっていた。
+//   人数依存で壊れる方式そのものをやめている(2026-08-17)
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// 通日(1970-01-01からの日数)。ローカルの暦日から作るのでタイムゾーン・夏時間の影響を受けない
+function dayNumber(ms) {
+  const [y, m, d] = dayStr(ms).split('-').map(Number);
+  return Math.floor(Date.UTC(y, m - 1, d) / 86400000);
+}
+
+// cycle番目の周期の並び(Fisher-Yates。同じcycleなら何度呼んでも同じ並び)
+function shuffledBag(names, cycle) {
+  const bag = names.slice();
+  const rnd = mulberry32(cycle);
+  for (let i = bag.length - 1; i > 0; i--) {
+    const j = Math.floor(rnd() * (i + 1));
+    [bag[i], bag[j]] = [bag[j], bag[i]];
+  }
+  return bag;
+}
+
 export function dailySetName() {
   const excl = new Set(getSettings().dailyExclude || []);
   const names = Object.keys(characterSets()).filter(n => !excl.has(n)).sort();
-  if (!names.length) return null;
-  let h = 0;
-  for (const c of dayStr(Date.now())) h = (h * 31 + c.charCodeAt(0)) >>> 0;
-  return names[h % names.length];
+  const n = names.length;
+  if (!n) return null;
+
+  const day = dayNumber(Date.now());
+  if (n === 1) return names[0];
+  if (n === 2) return names[day % 2];   // 2人だけなら、繰り返さずに出すには交互しかない
+
+  const cycle = Math.floor(day / n);
+  const bag = shuffledBag(names, cycle);
+  // 周期の変わり目で同じキャラが2日続くのを避ける(前の周期の最後と同じなら先頭2人を入れ替える)。
+  // 判定は周期全体で同じ結果になるので、周期内のどの日に呼んでも並びは一貫する。
+  // 入れ替えるのは添字0と1だけなので、n>=3 なら前の周期の末尾(添字n-1)は入れ替えの影響を受けない
+  // = 前の周期の生の並びをそのまま見てよい(n=2 を上で別扱いにしているのはこのため)
+  if (shuffledBag(names, cycle - 1)[n - 1] === bag[0]) {
+    [bag[0], bag[1]] = [bag[1], bag[0]];
+  }
+  return bag[day - cycle * n];
 }
 
 export function characterSets() {

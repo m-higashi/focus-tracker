@@ -967,15 +967,14 @@ function charState() {
 
 const DAILY_SET = '__daily__';
 
-// 日替わりの当選セット。サーバー決定値を最優先(全端末で一致)。
-// サーバー値が未取得の間だけ、同じ式でローカル計算にフォールバックする
+// 日替わりの当選セットはサーバーが決める(全端末で一致させるため)。
+// charSets と同じ /api/character の応答で入るので、ここで計算し直さない。
+// ⚠ 以前はサーバーと同じ抽選式をここにも書いていたが、
+//   ①charSets が空の間は charDaily も未取得なので、この計算は実際には一度も走らない
+//   ②dailyExclude を見ておらず、走ったとしても除外したキャラを選びうる
+//   ③抽選式が2か所にあると片方だけ直す事故が起きる(2026-08-17に削除)
 function dailySetName() {
-  if (charDaily) return charDaily;
-  const names = Object.keys(charSets).sort();
-  if (!names.length) return null;
-  let h = 0;
-  for (const c of todayStr()) h = (h * 31 + c.charCodeAt(0)) >>> 0;
-  return names[h % names.length];
+  return charDaily;
 }
 
 function resolveSetName() {
