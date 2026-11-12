@@ -1221,27 +1221,6 @@ function renderRangeStats(st) {
   else html += `<p class="muted">データが不足しています(集中度が算出できた日が2日以上必要)。</p>`;
   html += `</div>`;
 
-  // 連続作業時間と集中度(1点=1件。アラート設定値の検証用)
-  html += `<div class="card chart-card"><h2>連続作業時間と集中度</h2>`;
-  if ((st.gapPts || []).length >= 5) {
-    html += gapScatter(st.gapPts, lastStatus.settings.alertFixedMin);
-    html += `<details class="help"><summary>この図の見方</summary><p class="muted">点は1件の記録(色=難易度)。横軸は直前の勤務開始・休憩明けから何分連続で働いていたかです。縦の紫線は連続作業アラートの設定値で、線より右で集中度が下がっていれば、アラートを早めるサインです。</p></details>`;
-  } else {
-    html += `<p class="muted">データが不足しています(休憩・勤務イベントのある記録が5件以上必要)。</p>`;
-  }
-  html += `</div>`;
-
-  // 休憩と集中度(1点=1勤務。半日勤務・夜枠がある日に対応するため日単位でなく勤務単位)
-  const sessWithData = (st.sessions || []).filter(sn => sn.avgIndex != null);
-  html += `<div class="card chart-card"><h2>休憩回数と集中度の関係</h2>`;
-  if (sessWithData.length >= 2) {
-    html += breaksScatter(sessWithData);
-    html += `<details class="help"><summary>この図の見方</summary><p class="muted">横軸は1回の勤務(勤務開始から勤務終了まで)中に取った休憩の回数、縦軸はその勤務の集中度です。終了していない勤務は含まれません。</p></details>`;
-  } else {
-    html += `<p class="muted">データが不足しています(集中度が算出できた勤務が2回以上必要)。</p>`;
-  }
-  html += `</div>`;
-
   // ヒートマップ
   html += `<div class="card"><h2>時間帯 × 曜日の集中度</h2>${heatmapHtml(st.heatmap)}
     <div class="legend"><span><i style="background:${heatColor(0.6)}"></i>低調</span><span><i style="background:${heatColor(1)}"></i>普段どおり</span><span><i style="background:${heatColor(1.4)}"></i>好調</span><span><i style="background:var(--gauge-track);border:1px solid var(--border)"></i>データなし</span></div>
@@ -1570,32 +1549,6 @@ function dayAxisLabels(days, xs, W, H, L, R) {
   return s;
 }
 
-// 連続作業時間(直前の勤務開始・休憩明けからの分数)× 集中度の散布図
-function gapScatter(gapPts, alertMin) {
-  const W = 420, H = 230, L = 42, R = 14, T = 14, B = 34;
-  const maxGap = Math.max(...gapPts.map(p => p.gap));
-  const xMax = Math.max(60, Math.ceil(Math.min(maxGap, 180) * 1.05 / 10) * 10);
-  const vals = gapPts.map(p => p.index);
-  const yMax = Math.max(1.6, Math.ceil(Math.max(...vals) * 1.08 * 2) / 2);
-  const xs = v => L + (W - L - R) * Math.min(v, xMax) / xMax;
-  const ys = v => T + (H - T - B) * (1 - v / yMax);
-  let s = `<svg viewBox="0 0 ${W} ${H}">`;
-  // 基準線(1.0・アラート)は実線、グリッドは破線4 4(全チャート共通の線種ルール)
-  s += `<line class="grid" x1="${L}" y1="${ys(1)}" x2="${W - R}" y2="${ys(1)}" stroke="#b9c4dd"/><text x="${L - 6}" y="${ys(1) + 4}" font-size="11" fill="#8a93a5" text-anchor="end">1.0</text>`;
-  const gStep = xMax > 120 ? 60 : 30;
-  for (let g = 0; g <= xMax; g += gStep) {
-    const anchor = g === 0 ? 'start' : g === xMax ? 'end' : 'middle';
-    s += `<text x="${xs(g)}" y="${H - 10}" font-size="11" fill="#8a93a5" text-anchor="${anchor}">${g}分</text>`;
-    if (g > 0) s += `<line class="grid" x1="${xs(g)}" y1="${T}" x2="${xs(g)}" y2="${H - B}" stroke="#e3e7f0" stroke-dasharray="4 4"/>`;
-  }
-  if (alertMin && alertMin <= xMax) {
-    s += `<line x1="${xs(alertMin)}" y1="${T}" x2="${xs(alertMin)}" y2="${H - B}" stroke="var(--heading)" stroke-width="2" opacity=".8"/>`;
-  }
-  s += gapPts.map(p => `<circle cx="${xs(p.gap).toFixed(1)}" cy="${ys(p.index).toFixed(1)}" r="4" fill="${diffColor(p.difficulty)}" opacity=".65"><title>連続${Math.round(p.gap)}分 ${esc(diffLabel(p.difficulty))} ${p.index}</title></circle>`).join('');
-  s += `</svg>`;
-  return s;
-}
-
 // 上端・下端だけ個別に丸められる棒のパス(SVGのrectは4隅一括でしか丸められないため)
 function barPath(x, y, w, h, rTop, rBot) {
   const n = v => v.toFixed(1);
@@ -1722,25 +1675,6 @@ function heatmapHtml(heat) {
       s += `<rect x="${(L + h * cw).toFixed(2)}" y="${y}" width="${(cw - gap).toFixed(2)}" height="${ch - gap}" rx="2.5" fill="${heatColor(v)}"><title>${rows[w]}曜 ${h}時: ${v ?? 'データなし'}</title></rect>`;
     }
   }
-  s += `</svg>`;
-  return s;
-}
-
-function breaksScatter(sessions) {
-  const W = 420, H = 210, L = 34, R = 10, T = 14, B = 32;
-  const xMax = Math.max(3, ...sessions.map(d => d.breaks)) + 0.5;
-  const vals = sessions.map(d => d.avgIndex);
-  const yMax = Math.max(1.4, ...vals) * 1.1;
-  const xs = v => L + (W - L - R) * v / xMax;
-  const ys = v => T + (H - T - B) * (1 - v / yMax);
-  let s = `<svg viewBox="0 0 ${W} ${H}">`;
-  s += `<line class="grid" x1="${L}" y1="${ys(1)}" x2="${W - R}" y2="${ys(1)}" stroke="#b9c4dd"/><text x="${L - 5}" y="${ys(1) + 4}" font-size="11" fill="#8a93a5" text-anchor="end">1.0</text>`;
-  // 単位は各目盛りに付ける(右端の説明ラベルは目盛りと重なるため廃止。他の散布図と同じ方式)
-  for (let b = 0; b <= Math.floor(xMax); b++) {
-    s += `<text x="${xs(b)}" y="${H - 10}" font-size="11" fill="#8a93a5" text-anchor="middle">${b}回</text>`;
-  }
-  // 点=1勤務。テーマの白/黒一色(集中度は縦位置で読む。日別の棒グラフと同じルール、ユーザー指定)
-  s += sessions.map(d => `<circle cx="${xs(d.breaks)}" cy="${ys(d.avgIndex)}" r="6" fill="var(--text)" opacity=".85"><title>${d.day} ${fmtTime(d.start)}〜${fmtTime(d.end)}: 休憩${d.breaks}回 / 集中度${d.avgIndex}</title></circle>`).join('');
   s += `</svg>`;
   return s;
 }

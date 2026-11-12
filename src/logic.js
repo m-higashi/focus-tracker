@@ -584,12 +584,6 @@ export function statsRange(fromDay, toDay) {
 
   const days = {};
   const heat = Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => ({ sum: 0, n: 0 })));
-  // 各記録の「連続作業時間」= 直前の勤務開始/休憩明けからの経過分(rowsと同じ昇順で走査)
-  const resumes = db.prepare(
-    "SELECT at FROM work_events WHERE deleted = 0 AND type IN ('work_start','break_end') AND at < ? ORDER BY at"
-  ).all(eExt).map(r => r.at);
-  const gapPts = [];
-  let ri = -1;
   for (const [rowIdx, r] of rows.entries()) {
     const d = effD[rowIdx];
     days[d] ??= { counts: {}, dur: {}, idxSum: 0, idxN: 0 };
@@ -605,40 +599,7 @@ export function statsRange(fromDay, toDay) {
       const cell = heat[dt.getDay()][dt.getHours()];
       cell.sum += idx;
       cell.n++;
-      while (ri + 1 < resumes.length && resumes[ri + 1] <= r.ended_at) ri++;
-      if (ri >= 0) {
-        const gapMin = (r.ended_at - resumes[ri]) / 60000;
-        // 打刻忘れなどの異常値(10時間超)は散布図から除外
-        if (gapMin <= 600) {
-          gapPts.push({ gap: +gapMin.toFixed(1), index: +idx.toFixed(2), difficulty: r.difficulty });
-        }
-      }
     }
-  }
-
-  // 1勤務(勤務開始→勤務終了)ごとの休憩回数と集中度。半日勤務や夜枠など1日複数勤務に対応するため
-  // 日単位でなく勤務単位で数える。終了未打刻の勤務(進行中・押し忘れ)は集計しない。
-  // 0時またぎの勤務も退勤(eExt)まで含めて1勤務として拾う。
-  const sessions = [];
-  const workSpans = pairEvents(s, eExt, 'work_start', 'work_end').filter(p => p.end != null);
-  const breakStarts = db.prepare(
-    "SELECT at FROM work_events WHERE deleted = 0 AND type = 'break_start' AND at >= ? AND at < ? ORDER BY at"
-  ).all(s, eExt).map(r => r.at);
-  let rj = 0, bj = 0;
-  for (const sp of workSpans) {
-    while (rj < rows.length && rows[rj].ended_at < sp.start) rj++;
-    let idxSum = 0, idxN = 0;
-    for (let k = rj; k < rows.length && rows[k].ended_at < sp.end; k++) {
-      const m = med[rows[k].difficulty]?.median;
-      if (m && rows[k].duration_sec > 0) { idxSum += m / rows[k].duration_sec; idxN++; }
-    }
-    while (bj < breakStarts.length && breakStarts[bj] < sp.start) bj++;
-    let breaks = 0;
-    for (let k = bj; k < breakStarts.length && breakStarts[k] < sp.end; k++) breaks++;
-    sessions.push({
-      day: dayStr(sp.start), start: sp.start, end: sp.end, breaks,
-      avgIndex: idxN ? +(idxSum / idxN).toFixed(2) : null,
-    });
   }
 
   const sleepMap = sleepByDay(s, e);
@@ -664,7 +625,6 @@ export function statsRange(fromDay, toDay) {
   return {
     from: fromDay, to: toDay, days: list, medians: med,
     heatmap: heat.map(row => row.map(c => (c.n ? +(c.sum / c.n).toFixed(2) : null))),
-    gapPts, sessions,
   };
 }
 
